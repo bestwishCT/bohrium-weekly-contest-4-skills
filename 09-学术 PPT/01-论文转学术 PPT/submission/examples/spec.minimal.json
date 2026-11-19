@@ -1,0 +1,56 @@
+{
+  "case_id": "synthetic-paper-v1",
+  "source_pdf": "/app/work/paper.pdf",
+  "template": "/app/work/template.pptx",
+  "audience": "SYNTHETIC methods reviewers",
+  "time_minutes": 6,
+  "slide_count": 4,
+  "output_contract": {
+    "case_id": "synthetic-paper-v1",
+    "status": "",
+    "artifacts": [],
+    "evidence": "",
+    "render": {},
+    "uncertainty": []
+  },
+  "uncertainty": ["SYNTHETIC example only; no real-world efficacy claim"],
+  "pages": [
+    {
+      "role": "opening",
+      "claim": "SYNTHETIC question: can warming change recovery?",
+      "layout": "Title Slide",
+      "points": ["Synthetic paper-to-PPT example"],
+      "seconds": 40,
+      "sources": [{"pdf_page": 1, "section": "Abstract", "quote": "SYNTHETIC PAPER: Paired warming trial"}],
+      "notes": {"transition": "Name the fictitious source before discussing the trial.", "emphasis": "This is a software fixture, not medical evidence.", "backup": "The source consists of four deliberately short PDF pages."}
+    },
+    {
+      "role": "method",
+      "claim": "Paired 12-week design uses 40 samples",
+      "layout": "Title and Content",
+      "points": ["Paired control and warmed conditions", "Outcome: recovery in arbitrary units"],
+      "seconds": 90,
+      "sources": [{"pdf_page": 2, "section": "Methods", "quote": "Forty synthetic samples were paired for a 12-week warming trial."}],
+      "notes": {"transition": "The question requires a comparison within matched samples.", "emphasis": "The design and outcome are read verbatim from Methods.", "backup": "No randomization or causal efficacy beyond the synthetic setup is asserted."}
+    },
+    {
+      "role": "evidence",
+      "claim": "Figure 1: 8.0 and 5.0 a.u.",
+      "layout": "Two Content",
+      "points": ["Control: 5.0 a.u.", "Warmed: 8.0 a.u.", "Descriptive fixture values only"],
+      "seconds": 130,
+      "sources": [{"pdf_page": 3, "section": "Results", "figure": "Figure 1", "quote": "Figure 1 reports recovery of 8.0 versus 5.0 arbitrary units for warmed and control groups."}],
+      "visual": {"kind": "chart", "figure": "Figure 1 (synthetic)", "source": {"pdf_page": 3, "record_prefix": "Figure 1 data:"}, "categories": ["Control", "Warmed"], "series": [{"name": "Recovery", "values": [5.0, 8.0]}], "unit": "a.u.", "x_title": "Condition", "y_title": "Recovery (a.u.)", "axis_font_pt": 12},
+      "notes": {"transition": "With pairing established, inspect the only reported outcome.", "emphasis": "State both values and the arbitrary unit before describing direction.", "backup": "No p-value, confidence interval or error bars are supplied, so none are shown."}
+    },
+    {
+      "role": "limitation",
+      "claim": "Synthetic trial cannot support efficacy",
+      "layout": "Title and Content",
+      "points": ["Fictitious small trial", "No uncertainty statistics supplied", "Use only for converter verification"],
+      "seconds": 100,
+      "sources": [{"pdf_page": 4, "section": "Discussion", "quote": "This small fictitious trial establishes no clinical efficacy."}],
+      "notes": {"transition": "The numerical contrast must end at the stated evidence boundary.", "emphasis": "A visible difference is not evidence of clinical benefit.", "backup": "Absent uncertainty statistics and synthetic sampling prevent stronger interpretation."}
+    }
+  ]
+}

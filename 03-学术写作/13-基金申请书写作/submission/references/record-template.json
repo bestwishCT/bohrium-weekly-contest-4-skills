@@ -1,0 +1,22 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "record": {
+    "paragraphs": [],
+    "sources": {},
+    "objective_ids": [],
+    "objectives": {},
+    "contents": {},
+    "routes": {},
+    "metrics": {},
+    "phases": [],
+    "constraints": {
+      "months": 0
+    },
+    "gaps": [
+      "applicant_evidence"
+    ],
+    "workorder_read": true,
+    "manuscript": ""
+  }
+}

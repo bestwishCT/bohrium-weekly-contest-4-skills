@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "description": "Minimal synthetic aggregate-transcription example; replace only from the actual case dictionary and workorder.",
+  "input": {
+    "encoding": "utf-8",
+    "delimiter": ","
+  },
+  "key_fields": [
+    "sample_id",
+    "observed_at"
+  ],
+  "keys_expected_unique": true,
+  "duplicates": {
+    "exact": "drop_first",
+    "conflict": "quarantine_group"
+  },
+  "fields": [
+    {
+      "name": "sample_id",
+      "kind": "key",
+      "required": true,
+      "normalize": "casefold_strip"
+    },
+    {
+      "name": "observed_at",
+      "kind": "time",
+      "required": true
+    },
+    {
+      "name": "value",
+      "kind": "measure",
+      "type": "decimal",
+      "required": true,
+      "missing": {
+        "": "entry_missing",
+        "NA": "entry_missing",
+        "ND": "not_detected",
+        "<LOD": "below_lod",
+        "-999": "invalid_sentinel"
+      },
+      "invalid_action": "quarantine",
+      "decimal_comma": true,
+      "unit": {
+        "unit_column": "unit",
+        "target": "mg/L",
+        "unknown_action": "quarantine",
+        "factors": {
+          "ug/mL": "1",
+          "μg/mL": "1",
+          "µg/mL": "1",
+          "mg/L": "1",
+          "g/L": "1000"
+        }
+      },
+      "qc": {
+        "min": "0",
+        "max": "1000",
+        "action": "retain_unresolved"
+      }
+    },
+    {
+      "name": "unit",
+      "kind": "unit",
+      "required": true
+    }
+  ]
+}

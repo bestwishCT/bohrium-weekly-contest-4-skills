@@ -1,0 +1,37 @@
+{
+  "workorder": "biological_mechanism_pathway",
+  "title": "Source-bound mechanism and feedback",
+  "sources": [
+    {
+      "id": "src-entities",
+      "page": 1, "locator": "synthetic://pathway/source#localization",
+      "text": "Extracellular region contains the ligand Ligand L. Plasma membrane contains the receptor Receptor R. Cytosol contains the protein Kinase A and the protein Factor B. Nucleus contains the protein Regulator C."
+    },
+    {
+      "id": "src-edges",
+      "page": 1, "locator": "synthetic://pathway/source#interactions",
+      "text": "Ligand L binds Receptor R. Receptor R activates Kinase A. Receptor R activates Factor B. Kinase A phosphorylates Regulator C. Regulator C inhibits Receptor R as a feedback branch."
+    }
+  ],
+  "compartments": [
+    {"id": "outside", "label": "Extracellular", "role": "extracellular", "box": [70, 125, 1010, 100], "source": "src-entities", "quote": "Extracellular region"},
+    {"id": "membrane", "label": "Plasma membrane", "role": "membrane", "box": [70, 225, 1010, 75], "source": "src-entities", "quote": "Plasma membrane"},
+    {"id": "cytosol", "label": "Cytosol", "role": "cytosol", "box": [70, 300, 1010, 200], "source": "src-entities", "quote": "Cytosol contains"},
+    {"id": "nucleus", "label": "Nucleus", "role": "nucleus", "box": [220, 500, 720, 160], "source": "src-entities", "quote": "Nucleus contains"}
+  ],
+  "entities": [
+    {"id": "ligand-l", "label": "Ligand L", "kind": "ligand", "compartment": "outside", "center": [570, 175], "source": "src-entities", "quote": "ligand Ligand L"},
+    {"id": "receptor-r", "label": "Receptor R", "kind": "receptor", "compartment": "membrane", "center": [570, 262], "source": "src-entities", "quote": "receptor Receptor R"},
+    {"id": "kinase-a", "label": "Kinase A", "kind": "protein", "compartment": "cytosol", "center": [350, 405], "source": "src-entities", "quote": "protein Kinase A"},
+    {"id": "factor-b", "label": "Factor B", "kind": "protein", "compartment": "cytosol", "center": [780, 405], "source": "src-entities", "quote": "protein Factor B"},
+    {"id": "regulator-c", "label": "Regulator C", "kind": "protein", "compartment": "nucleus", "center": [570, 575], "source": "src-entities", "quote": "protein Regulator C"}
+  ],
+  "interactions": [
+    {"id": "bind-l-r", "type": "binding", "from": "ligand-l", "to": "receptor-r", "source": "src-edges", "quote": "Ligand L binds Receptor R."},
+    {"id": "activate-a", "type": "activation", "from": "receptor-r", "to": "kinase-a", "source": "src-edges", "quote": "Receptor R activates Kinase A."},
+    {"id": "activate-b", "type": "activation", "from": "receptor-r", "to": "factor-b", "source": "src-edges", "quote": "Receptor R activates Factor B."},
+    {"id": "phosphorylate-c", "type": "phosphorylation", "from": "kinase-a", "to": "regulator-c", "source": "src-edges", "quote": "Kinase A phosphorylates Regulator C."},
+    {"id": "feedback-c-r", "type": "inhibition", "from": "regulator-c", "to": "receptor-r", "route": "left-feedback", "source": "src-edges", "quote": "Regulator C inhibits Receptor R as a feedback branch."}
+  ],
+  "unresolved": []
+}

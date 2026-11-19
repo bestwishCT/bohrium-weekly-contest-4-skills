@@ -1,0 +1,12 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "record": {
+    "scope": "controlled_baseline_summary",
+    "baseline": "",
+    "revised": "",
+    "subrequests": [],
+    "responses": [],
+    "missing_evidence": []
+  }
+}

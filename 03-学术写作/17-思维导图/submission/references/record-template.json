@@ -1,0 +1,25 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "record": {
+    "materials": {},
+    "nodes": [
+      {
+        "id": "",
+        "parent": null,
+        "depth": 0,
+        "label": "",
+        "evidence": []
+      }
+    ],
+    "edges": [
+      {
+        "id": "",
+        "from": "",
+        "to": "",
+        "type": "",
+        "evidence": []
+      }
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "record": {
+    "sources": [
+      {
+        "id": "",
+        "level": "abstract|fulltext",
+        "text": ""
+      }
+    ],
+    "evidence": [
+      {
+        "id": "",
+        "source_id": "",
+        "locator": "",
+        "quote": "",
+        "support": "",
+        "claim_ids": []
+      }
+    ],
+    "claims": [
+      {
+        "id": "",
+        "sentence_id": "",
+        "sentence": "",
+        "evidence_ids": [],
+        "design": "",
+        "strength_reason": "",
+        "uncertainty": ""
+      }
+    ],
+    "manuscript": ""
+  }
+}

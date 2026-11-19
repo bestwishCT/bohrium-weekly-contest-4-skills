@@ -1,0 +1,37 @@
+{
+  "workorder": "source_value_chart",
+  "sources": [
+    {
+      "id": "src-spec",
+      "page": 1, "locator": "synthetic://chart/specification#axes-series",
+      "text": "The horizontal axis is Condition; the vertical axis is Signal (a.u.); error bars are SD. Control and Variant are the two series. Values are plotted without aggregation."
+    },
+    {
+      "id": "src-values",
+      "page": 1, "locator": "synthetic://chart/table#rows-1-4",
+      "text": "A Control value=2 error=0.2 a.u. A Variant value=3 error=0.3 a.u. B Control value=2.5 error=0.2 a.u. B Variant value=3.5 error=0.4 a.u."
+    }
+  ],
+  "chart": {
+    "type": "grouped-bar",
+    "title": "Measured signal by condition",
+    "canvas": [1200, 760],
+    "x_label": "Condition",
+    "y_label": "Signal (a.u.)",
+    "error_label": "SD", "unit": "a.u.",
+    "source": "src-spec",
+    "quote": "horizontal axis is Condition; the vertical axis is Signal (a.u.); error bars are SD",
+    "categories": ["A", "B"],
+    "series": [
+      {"id": "control", "label": "Control", "color": "#76a9c2", "source": "src-spec", "quote": "Control and Variant"},
+      {"id": "variant", "label": "Variant", "color": "#e0a458", "source": "src-spec", "quote": "Variant are the two series"}
+    ],
+    "records": [
+      {"id": "a-control", "category": "A", "series": "control", "value": 2, "error": 0.2, "unit": "a.u.", "source": "src-values", "quote": "A Control value=2 error=0.2 a.u."},
+      {"id": "a-variant", "category": "A", "series": "variant", "value": 3, "error": 0.3, "unit": "a.u.", "source": "src-values", "quote": "A Variant value=3 error=0.3 a.u."},
+      {"id": "b-control", "category": "B", "series": "control", "value": 2.5, "error": 0.2, "unit": "a.u.", "source": "src-values", "quote": "B Control value=2.5 error=0.2 a.u."},
+      {"id": "b-variant", "category": "B", "series": "variant", "value": 3.5, "error": 0.4, "unit": "a.u.", "source": "src-values", "quote": "B Variant value=3.5 error=0.4 a.u."}
+    ]
+  },
+  "unresolved": []
+}

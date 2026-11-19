@@ -1,0 +1,39 @@
+{
+  "case_id": "synthetic-editor-v1",
+  "mode": "existing-deck-edit",
+  "source_material": "/app/work/paper.pdf",
+  "starting_deck": "/app/work/starting.pptx",
+  "original_sha256": "REPLACE_WITH_INSPECT_FILE_SHA256",
+  "audience": "SYNTHETIC peer reviewers",
+  "time_minutes": 6,
+  "slide_count": 3,
+  "uncertainty": ["Synthetic edit fixture; values are descriptive only"],
+  "output_contract": {
+    "case_id": "synthetic-editor-v1",
+    "status": "",
+    "artifacts": [],
+    "diff": "",
+    "render": {},
+    "uncertainty": []
+  },
+  "page_evidence": [
+    {"slide": 1, "role": "opening", "claim": "SYNTHETIC paired warming trial", "seconds": 60, "sources": [{"pdf_page": 1, "quote": "SYNTHETIC PAPER: Paired warming trial"}]},
+    {"slide": 2, "role": "evidence", "claim": "Figure 1: 5.0 and 8.0 a.u.", "seconds": 160, "sources": [{"pdf_page": 3, "figure": "Figure 1", "quote": "Figure 1 reports recovery of 8.0 versus 5.0 arbitrary units for warmed and control groups."}]},
+    {"slide": 3, "role": "limitation", "claim": "No efficacy conclusion", "seconds": 100, "sources": [{"pdf_page": 4, "quote": "This small fictitious trial establishes no clinical efficacy."}]}
+  ],
+  "edits": [
+    {
+      "operation_id": "synthetic-replace-result-v1",
+      "action": "replace_page",
+      "slide": 2,
+      "expected_slide_fingerprint": "REPLACE_WITH_BASELINE_SLIDE_2_FINGERPRINT",
+      "reason": "Replace non-editable placeholder wording with a source-data-bound native chart; leave slides 1 and 3 untouched.",
+      "claim": "Figure 1: 5.0 and 8.0 a.u.",
+      "points": ["Control = 5.0 a.u.", "Warmed = 8.0 a.u.", "No inferential statistics supplied"],
+      "placeholder_idx": 1,
+      "visual_placeholder_idx": 2,
+      "visual": {"kind": "chart", "figure": "Figure 1 (synthetic)", "source": {"pdf_page": 3, "record_prefix": "Figure 1 data:"}, "categories": ["Control", "Warmed"], "series": [{"name": "Recovery", "values": [5.0, 8.0]}], "unit": "a.u.", "x_title": "Condition", "y_title": "Recovery (a.u.)"},
+      "notes": {"transition": "Retain the opening and move only the result object to editable form.", "emphasis": "Read each category, value and arbitrary unit without claiming significance.", "backup": "Figure 1 source text is on PDF page 3; slide 3 retains the efficacy boundary."}
+    }
+  ]
+}

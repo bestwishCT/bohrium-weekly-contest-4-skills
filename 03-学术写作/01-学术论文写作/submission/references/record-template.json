@@ -1,0 +1,24 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "record": {
+    "materials": [
+      {
+        "id": "M1",
+        "path": "",
+        "excerpt": ""
+      }
+    ],
+    "required_sections": [],
+    "manuscript": "",
+    "evidence": [
+      {
+        "claim_id": "",
+        "source_id": "",
+        "locator": "",
+        "value": ""
+      }
+    ],
+    "figures": []
+  }
+}

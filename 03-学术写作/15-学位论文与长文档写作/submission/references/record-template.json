@@ -1,0 +1,16 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "record": {
+    "chapters": [],
+    "workorder": {
+      "read": true,
+      "targets": []
+    },
+    "edits": [],
+    "terms": [],
+    "term_impacts": {},
+    "chapter_states": {},
+    "completed_thesis_claim": false
+  }
+}

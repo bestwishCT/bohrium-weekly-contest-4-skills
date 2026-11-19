@@ -1,0 +1,30 @@
+{
+  "workorder": "graphical_abstract",
+  "title": "Question to result graphical abstract",
+  "sources": [
+    {"id": "src-question", "page": 1, "locator": "synthetic://abstract/source#question", "text": "Research question: Which sample has greater signal? Sample A and Sample B are compared."},
+    {"id": "src-method", "page": 1, "locator": "synthetic://abstract/source#method", "text": "Paired measurement: Measure both samples. Measure A uses Sample A. Measure B uses Sample B."},
+    {"id": "src-result", "page": 1, "locator": "synthetic://abstract/source#result", "text": "Core result: Measured signal. Sample A value=2 a.u. Sample B value=3 a.u."},
+    {"id": "src-conclusion", "page": 1, "locator": "synthetic://abstract/source#conclusion", "text": "Observed direction: Sample B has greater measured signal than Sample A. No significance statement is supplied."}
+  ],
+  "panels": [
+    {"id": "panel-q", "role": "question", "title": "Research question", "body": "Which sample has greater signal?", "source": "src-question", "quote": "Research question: Which sample has greater signal?"},
+    {"id": "panel-m", "role": "method", "title": "Paired measurement", "body": "Measure both samples", "source": "src-method", "quote": "Paired measurement: Measure both samples."},
+    {"id": "panel-r", "role": "result", "title": "Core result", "body": "Measured signal", "source": "src-result", "quote": "Core result: Measured signal."},
+    {"id": "panel-c", "role": "conclusion", "title": "Observed direction", "body": "Sample B has greater measured signal than Sample A", "source": "src-conclusion", "quote": "Observed direction: Sample B has greater measured signal than Sample A."}
+  ],
+  "objects": [
+    {"id": "sample-a", "label": "Sample A", "color": "#76a9c2", "source": "src-question", "quote": "Sample A and Sample B"},
+    {"id": "sample-b", "label": "Sample B", "color": "#e0a458", "source": "src-question", "quote": "Sample B are compared"}
+  ],
+  "method_steps": [
+    {"id": "measure-a", "label": "Measure A", "object": "sample-a", "source": "src-method", "quote": "Measure A uses Sample A."},
+    {"id": "measure-b", "label": "Measure B", "object": "sample-b", "source": "src-method", "quote": "Measure B uses Sample B."}
+  ],
+  "result_records": [
+    {"id": "result-a", "object": "sample-a", "value": 2, "unit": "a.u.", "source": "src-result", "quote": "Sample A value=2 a.u."},
+    {"id": "result-b", "object": "sample-b", "value": 3, "unit": "a.u.", "source": "src-result", "quote": "Sample B value=3 a.u."}
+  ],
+  "comparison": {"higher": "sample-b", "lower": "sample-a", "source": "src-conclusion", "quote": "Sample B has greater measured signal than Sample A."},
+  "unresolved": []
+}

@@ -1,0 +1,37 @@
+{
+  "workorder": "editable_relationship_schematic",
+  "title": "Containment and sequence schematic",
+  "canvas": [1200, 760],
+  "sources": [
+    {
+      "id": "src-a",
+      "page": 1, "locator": "synthetic://schematic/statements#containment",
+      "text": "Module A contains Input sample and Reference sample. Module B contains Prepared sample and Compared sample."
+    },
+    {
+      "id": "src-b",
+      "page": 1, "locator": "synthetic://schematic/statements#sequence",
+      "text": "Input sample precedes Prepared sample. Prepared sample precedes Compared sample. Reference sample precedes Compared sample."
+    }
+  ],
+  "groups": [
+    {"id": "module-a", "label": "Module A", "source": "src-a", "quote": "Module A contains Input sample and Reference sample."},
+    {"id": "module-b", "label": "Module B", "source": "src-a", "quote": "Module B contains Prepared sample and Compared sample."}
+  ],
+  "entities": [
+    {"id": "input", "label": "Input sample", "group": "module-a", "column": 0, "row": 0, "source": "src-a", "quote": "Input sample and Reference sample"},
+    {"id": "reference", "label": "Reference sample", "group": "module-a", "column": 0, "row": 1, "source": "src-a", "quote": "Reference sample"},
+    {"id": "prepared", "label": "Prepared sample", "group": "module-b", "column": 1, "row": 0, "source": "src-a", "quote": "Prepared sample and Compared sample"},
+    {"id": "compared", "label": "Compared sample", "group": "module-b", "column": 1, "row": 1, "source": "src-a", "quote": "Compared sample"}
+  ],
+  "relations": [
+    {"id": "contain-a-input", "type": "contains", "from": "module-a", "to": "input", "source": "src-a", "quote": "Module A contains Input sample"},
+    {"id": "contain-a-reference", "type": "contains", "from": "module-a", "to": "reference", "source": "src-a", "quote": "Module A contains Input sample and Reference sample."},
+    {"id": "contain-b-prepared", "type": "contains", "from": "module-b", "to": "prepared", "source": "src-a", "quote": "Module B contains Prepared sample"},
+    {"id": "contain-b-compared", "type": "contains", "from": "module-b", "to": "compared", "source": "src-a", "quote": "Compared sample"},
+    {"id": "flow-input", "type": "sequence", "from": "input", "to": "prepared", "source": "src-b", "quote": "Input sample precedes Prepared sample."},
+    {"id": "flow-prepared", "type": "sequence", "from": "prepared", "to": "compared", "source": "src-b", "quote": "Prepared sample precedes Compared sample."},
+    {"id": "flow-reference", "type": "sequence", "from": "reference", "to": "compared", "source": "src-b", "quote": "Reference sample precedes Compared sample."}
+  ],
+  "unresolved": []
+}

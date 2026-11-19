@@ -1,0 +1,17 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "record": {
+    "paragraphs": [
+      {
+        "id": "",
+        "text": ""
+      }
+    ],
+    "number_map": {},
+    "entries": [],
+    "original_entries": [],
+    "dedup_groups": [],
+    "support": []
+  }
+}

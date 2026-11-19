@@ -1,0 +1,50 @@
+{
+  "workorder": "apparatus_and_technical_route",
+  "title": "Apparatus connections and numbered route",
+  "sources": [
+    {
+      "id": "src-parts",
+      "page": 1, "locator": "synthetic://apparatus/source#parts-and-ports",
+      "text": "Pump P1 is a pump and has the port out and the port in. Reactor R1 is a reactor and has the port in, the port out, and the port signal in. Collector C1 is a collector and has the port in. Sensor S1 is a sensor and has the port signal out."
+    },
+    {
+      "id": "src-flow",
+      "page": 1, "locator": "synthetic://apparatus/source#connections",
+      "text": "A material connection runs from Pump P1 out to Reactor R1 in. A material connection runs from Reactor R1 out to Collector C1 in. An information connection runs from Sensor S1 signal out to Reactor R1 signal in."
+    },
+    {
+      "id": "src-steps",
+      "page": 1, "locator": "synthetic://route/source#steps",
+      "text": "Step 1 is Load. Step 2 is React. Step 3 is Collect. Step 1 precedes Step 2. Step 2 precedes Step 3."
+    }
+  ],
+  "components": [
+    {"id": "pump-p1", "label": "Pump P1", "kind": "pump", "center": [190, 280], "source": "src-parts", "quote": "Pump P1 is a pump"},
+    {"id": "reactor-r1", "label": "Reactor R1", "kind": "reactor", "center": [550, 280], "source": "src-parts", "quote": "Reactor R1 is a reactor"},
+    {"id": "collector-c1", "label": "Collector C1", "kind": "collector", "center": [910, 280], "source": "src-parts", "quote": "Collector C1 is a collector"},
+    {"id": "sensor-s1", "label": "Sensor S1", "kind": "sensor", "center": [550, 450], "source": "src-parts", "quote": "Sensor S1 is a sensor"}
+  ],
+  "ports": [
+    {"id": "pump-out", "component": "pump-p1", "label": "out", "side": "right", "source": "src-parts", "quote": "Pump P1 is a pump and has the port out"},
+    {"id": "reactor-in", "component": "reactor-r1", "label": "in", "side": "left", "source": "src-parts", "quote": "Reactor R1 is a reactor and has the port in"},
+    {"id": "reactor-out", "component": "reactor-r1", "label": "out", "side": "right", "source": "src-parts", "quote": "Reactor R1 is a reactor and has the port in, the port out"},
+    {"id": "collector-in", "component": "collector-c1", "label": "in", "side": "left", "source": "src-parts", "quote": "Collector C1 is a collector and has the port in"},
+    {"id": "sensor-out", "component": "sensor-s1", "label": "signal out", "side": "top", "source": "src-parts", "quote": "Sensor S1 is a sensor and has the port signal out"},
+    {"id": "reactor-signal-in", "component": "reactor-r1", "label": "signal in", "side": "bottom", "source": "src-parts", "quote": "Reactor R1 is a reactor and has the port in, the port out, and the port signal in"}
+  ],
+  "connections": [
+    {"id": "feed", "type": "material", "from": "pump-out", "to": "reactor-in", "source": "src-flow", "quote": "material connection runs from Pump P1 out to Reactor R1 in."},
+    {"id": "collect", "type": "material", "from": "reactor-out", "to": "collector-in", "source": "src-flow", "quote": "material connection runs from Reactor R1 out to Collector C1 in."},
+    {"id": "sense", "type": "information", "from": "sensor-out", "to": "reactor-signal-in", "source": "src-flow", "quote": "information connection runs from Sensor S1 signal out to Reactor R1 signal in."}
+  ],
+  "steps": [
+    {"id": "step-load", "order": 1, "label": "Load", "source": "src-steps", "quote": "Step 1 is Load."},
+    {"id": "step-react", "order": 2, "label": "React", "source": "src-steps", "quote": "Step 2 is React."},
+    {"id": "step-collect", "order": 3, "label": "Collect", "source": "src-steps", "quote": "Step 3 is Collect."}
+  ],
+  "dependencies": [
+    {"id": "order-1-2", "type": "dependency", "from": "step-load", "to": "step-react", "source": "src-steps", "quote": "Step 1 precedes Step 2."},
+    {"id": "order-2-3", "type": "dependency", "from": "step-react", "to": "step-collect", "source": "src-steps", "quote": "Step 2 precedes Step 3."}
+  ],
+  "unresolved": []
+}

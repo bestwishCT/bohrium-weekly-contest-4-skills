@@ -1,0 +1,20 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "record": {
+    "source_facts": [],
+    "transformations": [
+      {
+        "audience": "",
+        "profile": {
+          "knowledge": "",
+          "purpose": "",
+          "genre": ""
+        },
+        "max_chars": 0,
+        "text": "",
+        "mapping": []
+      }
+    ]
+  }
+}

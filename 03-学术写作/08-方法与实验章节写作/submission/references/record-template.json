@@ -1,0 +1,45 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。无case明示优先级时省略case_priority，不得照抄示意依据。",
+  "record": {
+    "case_id": "",
+    "parameters": [
+      {
+        "name": "",
+        "value": "",
+        "unit": "",
+        "source_kind": "code|config|log",
+        "locator": ""
+      }
+    ],
+    "sources": {
+      "code": {},
+      "config": {},
+      "log": {}
+    },
+    "conflicts": {
+      "parameter_name": {
+        "values": [],
+        "case_priority": {
+          "order": ["code|config|log"],
+          "basis": {
+            "case_id": "必须与record.case_id一致",
+            "locator": "case.json中的精确定位",
+            "statement": "case明示优先级原文"
+          }
+        },
+        "affected_steps": []
+      }
+    },
+    "dataset": {
+      "total": 0,
+      "split_counts": {},
+      "split_ratios": {}
+    },
+    "steps": [],
+    "reproduction_gaps": [],
+    "reproduction_complete": false,
+    "commands_executed": false,
+    "manuscript": ""
+  }
+}

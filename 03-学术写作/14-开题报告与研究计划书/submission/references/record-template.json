@@ -1,0 +1,18 @@
+{
+  "synthetic_template": true,
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "record": {
+    "research_questions": [],
+    "objectives": {},
+    "routes": {},
+    "validations": {},
+    "outcomes": {},
+    "schedule": [],
+    "months": 0,
+    "costs": [],
+    "budget": 0,
+    "risks": [],
+    "thresholds": {},
+    "manuscript": ""
+  }
+}
