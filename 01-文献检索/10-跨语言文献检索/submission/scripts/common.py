@@ -267,7 +267,7 @@ def lookup(container, name, aliases):
 
 
 def type_ok(value, expected):
-    if expected in ("any", None) or value is None:
+    if expected in ("any", None):
         return True
     choices = expected if isinstance(expected, list) else [expected]
     checks = {
@@ -296,43 +296,59 @@ def default_for(name, expected):
     return 0
 
 
-def bind_value(spec, value, name, warnings, path):
-    expected = schema_type(spec, value)
+def bind_value(spec, value, name, warnings, path, required=False):
+    """Bind without inventing content or coercing invalid supplied values."""
     if value is MISSING:
-        warnings.append("unmapped:%s" % path)
-        value = default_for(name, expected)
-    if expected == "object" and isinstance(spec, dict):
-        local = value if isinstance(value, dict) else {}
-        properties = spec.get("properties", {})
-        if not properties and value is MISSING:
-            return {}
-        if not properties:
-            return local
-        return {key: bind_value(child, lookup(local, key, {}), key, warnings, path + "." + key) for key, child in properties.items()}
-    if expected == "array":
-        values = value if isinstance(value, list) else []
-        if not isinstance(value, list) and value not in ([], None):
-            warnings.append("type_coerced_to_empty_array:%s" % path)
-        item_spec = spec.get("items", {}) if isinstance(spec, dict) else {}
-        if isinstance(item_spec, dict) and item_spec.get("properties"):
-            return [bind_value(item_spec, item, name, warnings, "%s[%d]" % (path, i)) for i, item in enumerate(values)]
-        return values
+        if required:
+            warnings.append("required_missing:%s" % path)
+        return MISSING
+    expected = schema_type(spec, value)
     if not type_ok(value, expected):
         warnings.append("type_mismatch:%s" % path)
+        return value
+    if isinstance(spec, dict) and "enum" in spec and value not in spec["enum"]:
+        warnings.append("enum_mismatch:%s" % path)
+    if expected == "object" and isinstance(spec, dict):
+        properties = spec.get("properties", {})
+        required_names = spec.get("required", [])
+        required_names = set(required_names) if isinstance(required_names, list) else set()
+        if not isinstance(properties, dict):
+            return value
+        bound = {}
+        for key, child in properties.items():
+            item = bind_value(child, lookup(value, key, {}), key, warnings, path + "." + key, key in required_names)
+            if item is not MISSING:
+                bound[key] = item
+        for key in required_names - set(properties):
+            if key not in value:
+                warnings.append("required_missing:%s.%s" % (path, key))
+        return bound
+    if expected == "array" and isinstance(spec, dict) and isinstance(spec.get("items"), dict):
+        item_spec = spec["items"]
+        bound = []
+        for index, item in enumerate(value):
+            mapped = bind_value(item_spec, item, name, warnings, "%s[%d]" % (path, index), True)
+            if mapped is not MISSING:
+                bound.append(mapped)
+        return bound
     return value
 
 
 def render_result(case, payload):
     contract = case.get("output_contract", {})
     aliases = payload.get("_aliases", {})
-    properties, _ = properties_of(contract)
+    properties, required = properties_of(contract)
+    required = set(required) if isinstance(required, list) else set()
     result = {"case_id": case.get("case_id", "")}
     warnings = []
     for name, spec in properties.items():
-        if name == "case_id":
-            continue
-        result[name] = bind_value(spec, lookup(payload, name, aliases), name, warnings, name)
-    validation = {"mapped_fields": sorted(result), "warnings": warnings, "contract_detected": bool(properties)}
+        value = case.get("case_id", "") if name == "case_id" else lookup(payload, name, aliases)
+        mapped = bind_value(spec, value, name, warnings, name, name in required)
+        if mapped is not MISSING:
+            result[name] = mapped
+    if "case_id" in required and "case_id" not in properties and "case_id" not in case:
+        warnings.append("required_missing:case_id")
+    validation = {"valid": not warnings, "mapped_fields": sorted(result), "warnings": warnings, "contract_detected": bool(properties)}
     return result, validation
 
 
@@ -387,9 +403,18 @@ def run(algorithm, handler):
         payload["uncertainties"].append("Domain processing stopped; only the honest partial result is available.")
         payload["status_detail"] = {"completed": ["input inventory and partial result"], "incomplete": ["domain processing"]}
     result, validation = render_result(case, payload)
+    if not validation["valid"]:
+        payload["status"] = "partial"
+        payload["errors"].append({"type": "contract_validation_error", "message": "Output does not satisfy output_contract.", "warnings": validation["warnings"]})
+        detail = payload.get("status_detail", {})
+        incomplete = detail.get("incomplete", []) if isinstance(detail, dict) else []
+        if not isinstance(incomplete, list):
+            incomplete = [incomplete]
+        payload["status_detail"] = {"completed": detail.get("completed", []) if isinstance(detail, dict) else [], "incomplete": incomplete + ["output contract validation"]}
+        result, validation = render_result(case, payload)
     write_json(output / "result.json", result)
     write_json(work / "analysis.json", {k: v for k, v in payload.items() if k != "_aliases"})
     write_json(work / "contract_validation.json", validation)
     write_json(work / "run_log.json", {"algorithm": algorithm, "initial_contract_check": initial_validation, "final_contract_check": validation, "python": platform.python_version(), "resources_file": resources_status})
     print(json.dumps({"status": payload.get("status", "partial"), "case_id": case.get("case_id", ""), "result": str(output / "result.json"), "analysis": str(work / "analysis.json"), "warnings": len(validation["warnings"]) + len(payload.get("errors", []))}, ensure_ascii=False))
-    return 0 if not payload.get("errors") else 1
+    return 0 if not payload.get("errors") and validation["valid"] else 1

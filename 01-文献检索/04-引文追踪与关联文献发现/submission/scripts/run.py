@@ -50,7 +50,8 @@ def process(case, data, task, inv):
     if isinstance(seed, dict):
         seed_doi = norm_doi(seed.get("doi", ""))
         seed_title = norm_title(seed.get("title", ""))
-        seed_candidates = sorted({master_of.get(key, key) for key, node in canonical.items() if (seed_doi and seed_doi == norm_doi(node.get("doi", ""))) or (seed_title and seed_title == norm_title(node.get("title", "")))})
+        doi_candidates = sorted({master_of.get(key, key) for key, node in canonical.items() if seed_doi and seed_doi == norm_doi(node.get("doi", ""))})
+        seed_candidates = doi_candidates if doi_candidates else sorted({master_of.get(key, key) for key, node in canonical.items() if seed_title and seed_title == norm_title(node.get("title", ""))})
         if len(seed_candidates) == 1:
             seed_id = seed_candidates[0]
     else:

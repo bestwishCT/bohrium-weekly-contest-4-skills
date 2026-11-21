@@ -35,6 +35,8 @@ def process(case, data, task, inv):
 
     for question in questions:
         visit(question["id"])
+    if graph_errors:
+        order = []
     depth = {qid: 0 for qid in order}
     for qid in order:
         usable = [depth[d] for d in by_id[qid]["depends_on"] if d in depth]
@@ -82,8 +84,9 @@ def process(case, data, task, inv):
         hits = query.get("hits", query.get("record_ids", []))
         hits = [hits] if isinstance(hits, str) else hits
         resolved = {master_of.get(aliases.get(str(hit), str(hit)), aliases.get(str(hit), str(hit))) for hit in hits}
+        seen_direct.setdefault(sqid, set())
         newly_accepted = sorted(x for x in resolved if x in evidence.get(sqid, {}) and x not in seen_direct[sqid]) if success else []
-        seen_direct.setdefault(sqid, set()).update(newly_accepted)
+        seen_direct[sqid].update(newly_accepted)
         event = {"query_id": qid, "subquestion_id": sqid, "depends_on": query.get("depends_on", []), "purpose": query.get("purpose", ""), "trigger": query.get("trigger", ""), "expression": query.get("expression", query.get("query", "")), "source": query.get("source", ""), "status": state, "executed": executed, "response_locator": query.get("response_locator", ""), "input_hit_ids": hits, "new_direct_evidence_ids": newly_accepted, "observed_new_terms": query.get("new_terms", []), "trigger_audit": "documented" if index == 0 or norm_text(query.get("trigger", "")) else "unexplained_round"}
         by_sq_rounds.setdefault(sqid, []).append(event)
 
@@ -92,11 +95,11 @@ def process(case, data, task, inv):
         qid = question["id"]
         minimum = question.get("min_direct_sources", 1)
         minimum = minimum if isinstance(minimum, int) and minimum > 0 else 1
-        accepted = sorted(evidence.get(qid, {}))
+        accepted = sorted(seen_direct.get(qid, set()))
         rounds = by_sq_rounds.get(qid, [])
         successes = [x for x in rounds if x["executed"] and x["status"] in {"success", "observed", "completed", "partial"}]
         failures = [x for x in rounds if x["executed"] and x["status"] not in {"success", "observed", "completed", "partial"}]
-        dependencies_ok = all(dep in depth and len(evidence.get(dep, {})) >= max(1, int(by_id[dep].get("min_direct_sources", 1))) for dep in question["depends_on"])
+        dependencies_ok = all(dep in depth and len(seen_direct.get(dep, set())) >= max(1, int(by_id[dep].get("min_direct_sources", 1))) for dep in question["depends_on"])
         if question.get("ambiguity", False) or question.get("requires_human", False):
             stop, state = "terminology_or_scope_requires_human_adjudication", "unresolved"
         elif len(accepted) >= minimum and dependencies_ok:

@@ -15,7 +15,7 @@ description: 为系统性文献检索建立版本化纳排标准、真实片段�
 
 1. 读取 `environment/resources.yaml`、真实 `/input/case.json` 与 `/input/task.md`，取得 `case_id`、原始 `output_contract`、研究问题、现行标准版本、已有角色判断和审计要求。
 2. 读取九篇署名论文、实际查询输入和全部筛选记录。`search09` 合成重复导出和冲突意见只作 fixtures；保留合成属性，不能包装成真实双人判断或仲裁历史。
-3. 在 `/app/work/analysis_input.json` 整理实际标准和题录。查询只记录真实执行式、字段、时间和定位；每条 assessment 保留原角色、版本、理由码和证据片段。摘要缺失/乱码不能自动批准排除。
+3. 在 `/app/work/analysis_input.json` 整理实际标准和题录。查询只记录真实执行式、字段、时间和定位，并以记录侧 `query_id`（或查询侧 `hits`）保留真实查询—命中关系；每条 assessment 保留原角色、版本、理由码和证据片段。摘要缺失/乱码不能自动批准排除。
 4. 中间结果写 `/app/work`，最终结果写 `/app/output`。先保存部分结果，再从原始导出数逐步核对到唯一记录、建议、仲裁和确认。
 5. 在 `/skills/weekly-skill/scripts/run.py` 运行算法，依赖的 `common.py` 从脚本所在位置解析；任何私有标注文件都不能成为隐含依赖。
 
@@ -23,7 +23,7 @@ description: 为系统性文献检索建立版本化纳排标准、真实片段�
 
 1. **标准与理由码**：固定当前 `criteria.version` 和 `reason_codes`。每条判断必须声明使用的版本；历史 version 不匹配时触发 `needs_reassessment` 和 `standard_version_backlog`，绝不暗中选有利版本。
 2. **记录/研究分层**：规范 DOI 或题名+第一作者+年份仅合并同记录副本，保留每个导入 ID；`study_id` 另用于同研究的多个报告。自动簇和显式报告关系不可混用。
-3. **证据核验**：include/exclude 判断的理由码必须在标准字典中，且 evidence quote 经空白规范化后逐字存在于同一主记录标题/摘要。无证据、错片段、未知理由码或版本不符不能进入最终聚合，但其原判断永不删除。
+3. **证据核验**：include/exclude 判断的理由码必须在标准字典中，且 evidence quote 经空白规范化后逐字存在于该 assessment 所属输入记录的声明 locator；不得借用同簇其他副本的文本。无检索命中关系、证据、错片段、未知理由码或版本不符不能进入最终决定，但其原判断永不删除。
 4. **独立角色**：保留每个输入角色和 fixture 标签。角色只是输入声明，脚本不验证身份，也不把 machine-pass 写成真人。重复导出的无独立判断记录不会放大一致意见。
 5. **分歧分类**：直接标签不一致为 `label`，排除理由码不同为 `reason_code`；标准版本另列回溯项。有效分歧保持 review，除非真实输入 arbitration 给出当前版本、明确决定、理由和可在原文定位的 quote。
 6. **仲裁与终审**：只有明确且通过证据核验的仲裁可解决建议冲突，仍保留 `conflict_type` 和原双方判断。`researcher_confirmations` 单独核验记录，缺省时每条是 `awaiting_actual_researcher_confirmation`。
@@ -36,7 +36,7 @@ description: 为系统性文献检索建立版本化纳排标准、真实片段�
   "criteria": {"version": "criteria-v2", "reason_codes": {"POP": {"description": "wrong population"}, "OK": {"description": "meets criteria"}}},
   "criteria_history": [{"version": "criteria-v1", "change": "actual change"}],
   "queries": [{"id": "q1", "source": "actual source", "expression": "actual expression", "fields": ["title", "abstract"], "executed": true, "status": "observed", "search_date": "actual date", "response_locator": "response#1"}],
-  "records": [{"id": "r1", "study_id": "study-a", "doi": null, "title": "actual title", "abstract": "actual abstract", "assessments": [{"role": "actual input role or machine-pass-a", "label": "include", "reason_code": "OK", "criteria_version": "criteria-v2", "evidence": [{"quote": "verbatim quote", "locator": "page/section"}]}]}],
+  "records": [{"id": "r1", "query_id": "q1", "study_id": "study-a", "doi": null, "title": "actual title", "abstract": "actual abstract", "assessments": [{"role": "actual input role or machine-pass-a", "label": "include", "reason_code": "OK", "criteria_version": "criteria-v2", "evidence": [{"quote": "verbatim quote", "locator": "page/section"}]}]}],
   "arbitrations": [],
   "researcher_confirmations": []
 }
@@ -58,7 +58,7 @@ DOI 缺失不猜；强相似题名不强制合并且列待复核；空摘要进�
 ## 最小示意（虚构，非双人评审）
 
 ```json
-{"criteria":{"version":"demo-v1","reason_codes":{"OK":{}}},"queries":[],"records":[{"id":"r1","title":"SYNTHETIC RECORD","abstract":"Adults received demo treatment.","assessments":[{"role":"machine-demo","label":"include","reason_code":"OK","criteria_version":"demo-v1","evidence":[{"quote":"Adults received demo treatment.","locator":"abstract"}]}]}],"arbitrations":[],"researcher_confirmations":[]}
+{"criteria":{"version":"demo-v1","reason_codes":{"OK":{}}},"queries":[{"id":"q1","source":"demo-db","expression":"demo","executed":true,"status":"observed","response_locator":"demo-response#1"}],"records":[{"id":"r1","query_id":"q1","title":"SYNTHETIC RECORD","abstract":"Adults received demo treatment.","assessments":[{"role":"machine-demo","label":"include","reason_code":"OK","criteria_version":"demo-v1","evidence":[{"quote":"Adults received demo treatment.","locator":"abstract"}]}]}],"arbitrations":[],"researcher_confirmations":[]}
 ```
 
 ```bash

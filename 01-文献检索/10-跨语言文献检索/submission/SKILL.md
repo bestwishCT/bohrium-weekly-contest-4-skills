@@ -26,8 +26,8 @@ description: 基于有来源和许可的受控术语表开展双向跨语言文�
 3. **视图识别**：分别保存 metadata、abstract、body language 和 full-text 可用性。abstract-only 无正文语言证据时 body language 强制 unknown；出版方 full translation 缺 attribution 要告警；语言不从界面文字猜。
 4. **重复核验**：重复视图只有 `duplicate_of` 指向真实视图且供给的 `content_sha256` 或实际规范化文本 SHA-256 一致时才确认 exact duplicate。各视图来源仍保留，仅从 nonduplicate view 统计中排除。
 5. **作品归并**：按显式 work_id 或规范 DOI 建立 work registry。相同 DOI 却映射不同 work_id 会形成 identity conflict，不静默改写。原文、译文、摘要视图都保存在正确作品下。
-6. **原文语义对齐**：alignment 同时给 source_view/target_view、逐字 source quote/target quote、实际 locator 和 aligned/divergent/uncertain。两 quote 都必须在相应视图文本出现；词面命中无有效 aligned evidence 时只能 `lexical_hit_semantics_unverified`，不进入确认作品结果。
-7. **分别计数**：view hits 保留每个真实命中，work hits 按作品去重，并保存支持该作品的视图和两个方向证据。只有确认语义对齐的视图参与 confirmed work count；误译、版本冲突和未知视图均保留原因。
+6. **原文语义对齐**：alignment 同时给 source_view/target_view、逐字 source quote/target quote、双侧实际 locator 和 aligned/divergent/uncertain。两 quote 都必须在相应视图文本出现，语种与术语方向一致且属于同一作品；自映射、跨作品、缺 locator 或词面命中无有效 aligned evidence 时不得确认。
+7. **分别计数**：按方向×概念×变体矩阵区分已执行、命中、未命中和漏查。view hits 保留每个真实命中，confirmed views 按 view ID 去重，work hits 按作品去重；完全重复视图保留证据但另从 nonduplicate views 排除。误译、版本冲突和未知视图均保留原因。
 8. **稳定性**：同输入保持术语、视图指纹、命中状态和作品归属稳定；新增语种或新作品必须有实际材料，不能外推未知语种能力。
 
 核心结构：
@@ -43,14 +43,14 @@ description: 基于有来源和许可的受控术语表开展双向跨语言文�
 
 ## 输出与状态
 
-- `/app/output/result.json` 按真实合同生成且含 `case_id`；内部为 `controlled_terms/query_candidates/language_queries/view_hits/work_hits/views/work_registry/duplicate_views/alignment_conflicts/counts`。
+- `/app/output/result.json` 按真实合同生成且含 `case_id`；内部为 `controlled_terms/query_candidates/language_queries/coverage_matrix/view_hits/work_hits/views/work_registry/duplicate_views/alignment_conflicts/counts`。
 - `/app/work/analysis.json` 保存完整视图/语义审计，`contract_validation.json` 与 `run_log.json` 保存合同警告及环境。
-- `completed` 表示实际命中均有验证的语义对齐且没有版本/语言异常；`partial` 表示候选译词、未知正文语言、未验证命中或作品冲突；`empty` 是没有视图输入。没有真实译法或检索命中不补造。
+- `completed` 表示所有要求的方向/概念/变体均有真实查询证据，实际命中均有验证的语义对齐且没有版本/语言异常；候选术语只有取得上述真实证据才能确认。`partial` 表示漏查、无证据候选译词、未知正文语言、未验证命中或作品冲突；`empty` 是没有视图输入。没有真实译法或检索命中不补造。
 - confirmed works、confirmed views 和 nonduplicate views 是不同口径，报告时不可混用。不能声称 live coverage、未见语种实测或创造新研究版本。
 
 ## 依赖与降级
 
-仅 Python 3 标准库，合成安装副本实测 **CPython 3.9.6**，未实测其他版本。无翻译服务、网络或包依赖。退出码 0=算法执行结束，1=部分结果伴随异常，2=case/task 读取失败。
+仅 Python 3 标准库，合成安装副本实测 **CPython 3.9.6**，未实测其他版本。无翻译服务、网络或包依赖。退出码 0=算法执行结束且输出合同有效，1=领域异常或 required/type/enum/items 合同校验失败（保留诚实 partial），2=case/task 读取失败。
 
 无学科对应译法保留候选和释义性查询计划；语言不确定则 unknown；翻译失败保存源词和未完成查询；原文不可得只评价可见元数据/摘要；原文与译文冲突并列归属，不静默修正出版译文。
 

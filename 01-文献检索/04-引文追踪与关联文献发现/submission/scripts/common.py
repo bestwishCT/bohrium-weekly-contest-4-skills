@@ -267,7 +267,7 @@ def lookup(container, name, aliases):
 
 
 def type_ok(value, expected):
-    if expected in ("any", None) or value is None:
+    if expected in ("any", None):
         return True
     choices = expected if isinstance(expected, list) else [expected]
     checks = {
@@ -298,23 +298,33 @@ def default_for(name, expected):
 
 def bind_value(spec, value, name, warnings, path):
     expected = schema_type(spec, value)
-    if value is MISSING:
+    missing = value is MISSING
+    if missing:
         warnings.append("unmapped:%s" % path)
         value = default_for(name, expected)
+    if isinstance(spec, dict) and "enum" in spec and value not in spec["enum"]:
+        warnings.append("enum_mismatch:%s" % path)
     if expected == "object" and isinstance(spec, dict):
+        if not missing and not isinstance(value, dict):
+            warnings.append("type_mismatch:%s" % path)
         local = value if isinstance(value, dict) else {}
         properties = spec.get("properties", {})
-        if not properties and value is MISSING:
+        required = spec.get("required", [])
+        if isinstance(required, list):
+            for key in required:
+                if isinstance(key, str) and lookup(local, key, {}) is MISSING:
+                    warnings.append("required_missing:%s.%s" % (path, key))
+        if not properties and missing:
             return {}
         if not properties:
             return local
         return {key: bind_value(child, lookup(local, key, {}), key, warnings, path + "." + key) for key, child in properties.items()}
     if expected == "array":
         values = value if isinstance(value, list) else []
-        if not isinstance(value, list) and value not in ([], None):
+        if not missing and not isinstance(value, list):
             warnings.append("type_coerced_to_empty_array:%s" % path)
         item_spec = spec.get("items", {}) if isinstance(spec, dict) else {}
-        if isinstance(item_spec, dict) and item_spec.get("properties"):
+        if isinstance(item_spec, dict) and item_spec:
             return [bind_value(item_spec, item, name, warnings, "%s[%d]" % (path, i)) for i, item in enumerate(values)]
         return values
     if not type_ok(value, expected):
@@ -325,9 +335,22 @@ def bind_value(spec, value, name, warnings, path):
 def render_result(case, payload):
     contract = case.get("output_contract", {})
     aliases = payload.get("_aliases", {})
-    properties, _ = properties_of(contract)
+    properties, required = properties_of(contract)
     result = {"case_id": case.get("case_id", "")}
     warnings = []
+    if isinstance(required, list):
+        for name in required:
+            if not isinstance(name, str):
+                continue
+            value = result["case_id"] if name == "case_id" else lookup(payload, name, aliases)
+            if value is MISSING:
+                warnings.append("required_missing:%s" % name)
+    if "case_id" in properties:
+        spec = properties["case_id"]
+        if not type_ok(result["case_id"], schema_type(spec, result["case_id"])):
+            warnings.append("type_mismatch:case_id")
+        if isinstance(spec, dict) and "enum" in spec and result["case_id"] not in spec["enum"]:
+            warnings.append("enum_mismatch:case_id")
     for name, spec in properties.items():
         if name == "case_id":
             continue
@@ -392,4 +415,4 @@ def run(algorithm, handler):
     write_json(work / "contract_validation.json", validation)
     write_json(work / "run_log.json", {"algorithm": algorithm, "initial_contract_check": initial_validation, "final_contract_check": validation, "python": platform.python_version(), "resources_file": resources_status})
     print(json.dumps({"status": payload.get("status", "partial"), "case_id": case.get("case_id", ""), "result": str(output / "result.json"), "analysis": str(work / "analysis.json"), "warnings": len(validation["warnings"]) + len(payload.get("errors", []))}, ensure_ascii=False))
-    return 0 if not payload.get("errors") else 1
+    return 0 if not payload.get("errors") and not validation["warnings"] else 1

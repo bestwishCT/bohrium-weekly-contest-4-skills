@@ -8,6 +8,7 @@ from common import norm_text, records_at, run
 
 PUBLIC_FIELDS = ["title", "abstract", "applicants", "inventors", "classifications", "priority_date", "filing_date", "publication_date", "grant_date", "language"]
 SUCCESS = {"success", "observed", "completed", "local_snapshot"}
+FINISHED_QUERY_STATUSES = {"completed_local_snapshot", "no_hit_in_available_authorized_corpus"}
 
 
 def compact_number(value):
@@ -100,12 +101,14 @@ def process(case, data, task, inv):
         qtype = query.get("query_type", "number" if query.get("raw_number") else "topic")
         source_name = norm_text(query.get("source", ""))
         source = source_by_name.get(source_name, {})
-        if source_name and source.get("authorization", "red") == "red":
-            query_results.append({"query_id": qid, "query_type": qtype, "status": "blocked_authorization", "matches": [], "scientific_matches": [], "effect": "no access/export or substitute results"})
+        if not source_name or source_name not in source_by_name or source.get("authorization", "red") not in {"green", "yellow"}:
+            query_results.append({"query_id": qid, "query_type": qtype, "status": "blocked_authorization", "matches": [], "scientific_matches": [], "effect": "query source must be declared, registered and authorized; no substitute results"})
             continue
-        if query.get("executed") is False or query.get("status") not in SUCCESS:
-            query_results.append({"query_id": qid, "query_type": qtype, "status": query.get("status", "not_executed"), "matches": [], "scientific_matches": [], "effect": "unavailable is not zero hits"})
+        query_status = norm_text(query.get("status", "")) or "not_executed"
+        if query.get("executed") is False or query_status not in SUCCESS:
+            query_results.append({"query_id": qid, "query_type": qtype, "status": "not_executed" if query.get("executed") is False else query_status, "matches": [], "scientific_matches": [], "effect": "timeout, rate-limit, unavailable and other unsuccessful states are not zero hits or completed searches"})
             continue
+        scoped_records = {rid: record for rid, record in allowed_records.items() if record["source"] == source_name}
         matches = []
         science_matches = []
         if qtype == "number":
@@ -114,24 +117,34 @@ def process(case, data, task, inv):
             if not number_type or not target:
                 query_results.append({"query_id": qid, "query_type": qtype, "status": "ambiguous_number_type", "matches": [], "scientific_matches": [], "effect": "publication/application/grant/priority numbers are not guessed"})
                 continue
-            for rid, record in allowed_records.items():
+            for rid, record in scoped_records.items():
                 for number in record["numbers"]:
                     if number["number_type"] == number_type and compact_number(number["raw"]) == target:
                         matches.append({"record_id": rid, "matched_number": number, "evidence_strength": "direct_typed_number_match"})
-            result_scope = "typed exact match in authorized finite corpus; no similar-number padding"
+            result_scope = "typed exact match in the query's registered authorized source; no similar-number padding"
         else:
             terms = [norm_text(x).casefold() for x in query.get("terms", []) if norm_text(x)]
-            classifications = {norm_text(x).upper() for x in query.get("classifications", [])}
-            for rid, record in allowed_records.items():
+            classifications = {norm_text(x).upper() for x in query.get("classifications", []) if norm_text(x)}
+            applicant = norm_text(query.get("applicant", "")).casefold()
+            if not terms and not classifications and not applicant:
+                query_results.append({"query_id": qid, "query_type": qtype, "status": "empty_query_conditions", "matches": [], "scientific_matches": [], "effect": "no topic, classification or applicant condition; empty conditions never match the whole corpus"})
+                continue
+            for rid, record in scoped_records.items():
                 corpus = norm_text(" ".join(str(v) for v in record["fields"].values()) + " " + " ".join(c["text"] for c in record["claims"])).casefold()
                 actual_classes = {norm_text(x).upper() for x in record["fields"].get("classifications", [])} if isinstance(record["fields"].get("classifications", []), list) else set()
-                if all(term in corpus for term in terms) and (not classifications or classifications & actual_classes):
+                applicants = record["fields"].get("applicants", [])
+                applicants = applicants if isinstance(applicants, list) else [applicants]
+                actual_applicants = [norm_text(x).casefold() for x in applicants]
+                if all(term in corpus for term in terms) and (not classifications or classifications & actual_classes) and (not applicant or any(applicant in value for value in actual_applicants)):
                     matches.append({"record_id": rid, "matched_terms": terms, "matched_classifications": sorted(classifications & actual_classes), "evidence_strength": "declared_local_topic_field_match"})
-            for paper in scientific:
-                corpus = norm_text(str(paper.get("title", "")) + " " + str(paper.get("methods", ""))).casefold()
-                if all(term in corpus for term in terms):
-                    science_matches.append(paper["paper_id"])
-            result_scope = "all supplied terms AND optional IPC/CPC intersection in authorized local fields; scientific papers counted separately"
+            if terms:
+                for paper in scientific:
+                    if paper["source"] != source_name:
+                        continue
+                    corpus = norm_text(str(paper.get("title", "")) + " " + str(paper.get("methods", ""))).casefold()
+                    if all(term in corpus for term in terms):
+                        science_matches.append(paper["paper_id"])
+            result_scope = "supplied topic/classification/applicant conditions in the query's registered authorized source; scientific papers counted separately"
         query_results.append({"query_id": qid, "query_type": qtype, "status": "completed_local_snapshot" if matches or science_matches else "no_hit_in_available_authorized_corpus", "number_type": query.get("number_type"), "raw_number": query.get("raw_number"), "terms": query.get("terms", []), "classifications": query.get("classifications", []), "applicant": query.get("applicant"), "source": source_name, "source_version": source.get("version"), "material_date": query.get("material_date", source.get("material_date")), "query_date": query.get("query_date", source.get("query_date")), "matches": matches, "scientific_matches": science_matches, "scope": result_scope})
         for match in matches:
             rid = match["record_id"]
@@ -147,9 +160,10 @@ def process(case, data, task, inv):
                 if claim["ocr_review_required"]:
                     claim_review.append({"record_id": rid, "claim_version_id": claim["claim_version_id"], "source_locator": claim["source_locator"], "issue": "low or missing OCR confidence; original image/page review required"})
     matched_ids = sorted({m["record_id"] for q in query_results for m in q["matches"]})
-    status = "empty" if not queries else "partial" if excluded or scientific_exclusions or excluded_family_links or any(q["status"] in {"blocked_authorization", "ambiguous_number_type", "failed", "not_executed"} for q in query_results) else "completed_with_current_legal_status_unknown"
+    incomplete_queries = [q for q in query_results if q["status"] not in FINISHED_QUERY_STATUSES]
+    status = "empty" if not queries else "partial" if excluded or scientific_exclusions or excluded_family_links or incomplete_queries else "completed_with_current_legal_status_unknown"
     return {
-        "status": status, "status_detail": {"completed": ["authorization matrix", "typed number/topic search", "observed family and claim-version audit"], "incomplete": ["current official legal status remains unverified", "red/yellow restricted scopes"] + (["undeclared or unauthorized scientific literature excluded"] if scientific_exclusions else []) + (["unauthorized or under-scoped family links excluded"] if excluded_family_links else []) + (["OCR/manual facsimile review"] if claim_review else [])},
+        "status": status, "status_detail": {"completed": ["authorization matrix"] + ([] if incomplete_queries else ["typed number/topic search"]) + ["observed family and claim-version audit"], "incomplete": ["current official legal status remains unverified", "red/yellow restricted scopes"] + (["queries incomplete: " + ", ".join(q["query_id"] + "=" + q["status"] for q in incomplete_queries)] if incomplete_queries else []) + (["undeclared or unauthorized scientific literature excluded"] if scientific_exclusions else []) + (["unauthorized or under-scoped family links excluded"] if excluded_family_links else []) + (["OCR/manual facsimile review"] if claim_review else [])},
         "authorization_matrix": source_logs, "excluded_restricted_records": excluded, "excluded_scientific_records": scientific_exclusions, "excluded_family_links": excluded_family_links,
         "query_results": query_results, "matched_patents": [allowed_records[rid] for rid in matched_ids],
         "primary_results": query_results, "observed_families": families,
