@@ -41,7 +41,7 @@ description: Adapt real academic content to an actual PPTX master/layout system 
 
 ## 批量适配与整册审计
 
-对每页依次填真实槽位、写原生备注，应用可读字号阶梯并关闭自动无限缩字。图像按容器等比 fit，默认零裁切；若有实际授权裁切必须记录区域且目检轴、图例、单位和图注全部保留。原生图表只接受具有真实 categories/series 的 PowerPoint chart + 内嵌 workbook，不从位图猜数；轴标题/图例/单位保持源含义。也接受按物理 PDF 页裁出的实际源图（`kind: figure` + `source_pdf_page`），以容器等比放置且零裁切；不能使用不在工作区内的匿名图片。
+对每页依次填真实槽位、写原生备注，应用可读字号阶梯并关闭自动无限缩字。图像按容器等比 fit，默认零裁切；若有实际授权裁切必须记录区域且目检轴、图例、单位和图注全部保留。原生图表只接受具有真实 categories/series 的 PowerPoint chart + 内嵌 workbook，不从位图猜数；轴标题/图例/单位保持源含义。也接受按物理 PDF 页裁出的实际源图（`kind: figure` + `source_pdf_page` + PDF 点坐标 `source_pdf_crop`），脚本从当前 PDF 重裁并核对声明 PNG 的 SHA-256，且要求同页同 Figure 引用，以容器等比放置且零裁切；不能使用不在工作区内的匿名图片。每页 `sources` 必须非空并含精确引文。可用顶层 `source_sha256` / `template_sha256` 绑定已审版本；未提供外部预期哈希时仅证明本次构建使用同一源文件，不声称验证官方源。`source_pdf_ledger.json` 覆盖每个物理页并单列空文本/OCR 待读页；没有实际 OCR 不得把扫描页当作已读证据。
 
 `page_deviations.json` 必须覆盖**每一页**并报告：
 
@@ -66,9 +66,9 @@ python3 "$SKILL_DIR/scripts/render_and_check.py" \
   --work /app/work/render
 ```
 
-渲染脚本从最终 PPTX 通过 LibreOffice 生成 PDF、逐页 PNG/contact sheet，检查 PPTX/PDF 页数和比例、PDF 文本缺失/越界、图片裁切并记录渲染器/PDF 库版本。若资源提供其他原生 renderer，使用其真实命令和版本达到同等输出。工具缺失立刻非零、`not-passed`；不接受 HTML、SVG 拼版或手工图充当导出，也不要求先删可编辑 deck。
+渲染脚本先核对 `adaptation_record.json` 的最终 PPTX SHA-256，再从最终 PPTX 通过 LibreOffice 生成 PDF、逐页 PNG/contact sheet，检查 PPTX/PDF 页数和比例、PDF 文本缺失/越界、图片裁切并记录渲染器/PDF 库版本。若资源提供其他原生 renderer，使用其真实命令和版本达到同等输出。工具缺失立刻非零、`not-passed`；哈希变化或陈旧预览保持 `partial`，不接受 HTML、SVG 拼版或手工图充当导出，也不要求先删可编辑 deck。
 
-逐页查看最终 PNG/PDF，不只读 OOXML：检查长标题/末行/表格、项目符号/公式、字体替换与乱码、图像分辨率和裁切、母版页脚/页码、前后页标题位置/留白/层级一致性以及 PPTX↔PDF 页序对应。自动 `automated-render-passed` 后仍需实际视觉复核和科学核对；记录真实替换、低分辨率或本地软件差异。渲染完成后将真实状态与限制写回原 output_contract 对应字段，不能留下 pending。
+逐页查看最终 PNG/PDF，不只读 OOXML：检查长标题/末行/表格、项目符号/公式、字体替换与乱码、图像分辨率和裁切、母版页脚/页码、前后页标题位置/留白/层级一致性以及 PPTX↔PDF 页序对应。自动 `automated-render-passed-visual-required` 后仍需实际视觉复核和科学核对；记录真实替换、低分辨率或本地软件差异。渲染完成后将真实状态、命令/退出码与限制写回原 output_contract 已存在字段，保留 case_id 和其他深层数据，不能留下固定 pending；自动渲染或视觉复核都不等于科学内容验证。
 
 ## 最小非官方示例
 

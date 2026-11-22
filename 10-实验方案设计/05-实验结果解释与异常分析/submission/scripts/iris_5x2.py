@@ -10,6 +10,38 @@ from pathlib import Path
 SUPPORTED = {"nearest_centroid", "nearest_neighbor"}
 
 
+def valid_id(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def list_of_objects(value, at, errors):
+    if not isinstance(value, list):
+        errors.append({"code": "OBJECT_LIST_REQUIRED", "at": at})
+        return []
+    output = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            errors.append({"code": "OBJECT_LIST_ITEM_INVALID", "at": at, "index": index})
+            output.append({})
+        else:
+            output.append(item)
+    return output
+
+
+def validate_ids(items, at, errors):
+    seen = {}
+    for index, item in enumerate(items):
+        value = item.get("id")
+        location = f"{at}[{index}].id"
+        if not valid_id(value):
+            errors.append({"code": "ID_MISSING_OR_INVALID", "at": location, "value": value})
+            continue
+        if value in seen:
+            errors.append({"code": "DUPLICATE_ID", "at": location, "id": value, "first_index": seen[value], "duplicate_index": index})
+        else:
+            seen[value] = index
+
+
 def parse_features(row, index):
     features = [Decimal(str(value)) for value in row["features"]]
     if not features or not all(value.is_finite() for value in features):
@@ -38,11 +70,14 @@ def predict(name, train, features):
 
 def run(config):
     errors = []
-    if not config.get("config_source"):
+    if not valid_id(config.get("case_id")):
+        errors.append({"code": "CASE_ID_REQUIRED", "field": "case_id", "value": config.get("case_id")})
+    if not valid_id(config.get("config_source")):
         errors.append({"code": "CONFIG_SOURCE_REQUIRED"})
     rows = []
+    dataset = list_of_objects(config.get("dataset", []), "dataset", errors)
     try:
-        for index, row in enumerate(config.get("dataset", [])):
+        for index, row in enumerate(dataset):
             rows.append((index, parse_features(row, index), str(row["label"])))
     except (InvalidOperation, ValueError, TypeError, KeyError) as exc:
         errors.append({"code": "DATASET_INVALID", "message": str(exc)})
@@ -50,8 +85,12 @@ def run(config):
         errors.append({"code": "DATASET_EMPTY"})
     if len({len(row[1]) for row in rows}) > 1:
         errors.append({"code": "FEATURE_LENGTH_MISMATCH"})
-    splits = config.get("splits", [])
+    splits = list_of_objects(config.get("splits", []), "splits", errors)
+    validate_ids(splits, "splits", errors)
     estimators = config.get("estimators", [])
+    if not isinstance(estimators, list) or not all(isinstance(name, str) for name in estimators):
+        errors.append({"code": "ESTIMATOR_LIST_INVALID", "actual": estimators})
+        estimators = []
     if len(splits) != 5:
         errors.append({"code": "FIVE_SPLITS_REQUIRED", "actual": len(splits)})
     if len(estimators) != 2 or len(set(estimators)) != 2:
@@ -64,8 +103,11 @@ def run(config):
     if not errors:
         for split_index, split in enumerate(splits):
             train_indices, test_indices = split.get("train_indices", []), split.get("test_indices", [])
+            if not isinstance(train_indices, list) or not isinstance(test_indices, list):
+                errors.append({"code": "SPLIT_INDEX_LIST_REQUIRED", "split": split_index})
+                continue
             valid_index = lambda i: isinstance(i, int) and not isinstance(i, bool) and 0 <= i < len(rows)
-            if not train_indices or not test_indices or set(train_indices) & set(test_indices) or not all(valid_index(i) for i in train_indices + test_indices):
+            if not train_indices or not test_indices or not all(valid_index(i) for i in train_indices + test_indices) or set(train_indices) & set(test_indices):
                 errors.append({"code": "SPLIT_INDICES_INVALID", "split": split_index})
                 continue
             if len(set(train_indices)) != len(train_indices) or len(set(test_indices)) != len(test_indices):

@@ -47,9 +47,21 @@ class PDFEvidence:
             import fitz
         except ImportError:
             raise ValueError("dependency-blocked: PyMuPDF is required to read source PDF pages")
+        self.path = path
+        self.sha256 = sha(path)
+        self.page_lines, self.page_ledger = [], []
         with fitz.open(str(path)) as document:
-            self.page_lines = [[self.canonical(line) for line in page.get_text("text", sort=True).splitlines() if self.canonical(line)]
-                               for page in document]
+            for page in document:
+                lines = [self.canonical(line) for line in page.get_text("text", sort=True).splitlines() if self.canonical(line)]
+                self.page_lines.append(lines)
+                has_nontext_content = bool(page.get_images(full=True) or page.get_drawings())
+                self.page_ledger.append({
+                    "pdf_page": page.number + 1,
+                    "text_lines": len(lines),
+                    "read_status": "text-extracted" if lines else ("ocr-pending" if has_nontext_content else "empty-page"),
+                    "ocr_status": "not-run",
+                    "ocr_pending": not lines and has_nontext_content,
+                })
         if not self.page_lines:
             raise ValueError("source PDF has no pages")
 
@@ -141,6 +153,45 @@ class PDFEvidence:
         if visual.get("y_title") != expected_axis:
             raise ValueError(f"{context}: value-axis title must exactly bind the source measure and unit")
 
+    def validate_image(self, visual, citations, root, context):
+        """Require a byte-reproducible PDF crop; an unrelated PNG is not evidence."""
+        import fitz
+
+        source = visual.get("source")
+        image_path = (root / visual.get("path", "")).resolve()
+        if not isinstance(source, dict) or not image_path.is_file():
+            raise ValueError(f"{context}: PDF-derived image requires an actual PNG and source record")
+        page = source.get("pdf_page")
+        if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= len(self.page_lines):
+            raise ValueError(f"{context}: image physical PDF page is invalid")
+        if not any(s.get("pdf_page") == page and s.get("figure") and visual.get("figure", "").startswith(s["figure"]) for s in citations):
+            raise ValueError(f"{context}: image needs a citation to the same figure on the same physical PDF page")
+        clip, matrix = source.get("clip"), source.get("matrix")
+        if not isinstance(clip, list) or len(clip) != 4 or not isinstance(matrix, list) or len(matrix) != 2:
+            raise ValueError(f"{context}: PDF image requires clip=[x0,y0,x1,y1] and matrix=[sx,sy]")
+        try:
+            coordinates = [number(v, f"{context} clip") for v in clip]
+            scales = [number(v, f"{context} matrix") for v in matrix]
+        except ValueError:
+            raise
+        if any(v <= 0 for v in scales) or coordinates[0] >= coordinates[2] or coordinates[1] >= coordinates[3]:
+            raise ValueError(f"{context}: invalid PDF crop or raster scale")
+        if source.get("source_sha256") is not None and source["source_sha256"] != self.sha256:
+            raise ValueError(f"{context}: source PDF version differs from the image provenance lock")
+        actual_hash = sha(image_path)
+        if source.get("recrop_sha256") != actual_hash:
+            raise ValueError(f"{context}: recrop_sha256 must lock the exact supplied PNG")
+        with fitz.open(str(self.path)) as document:
+            pdf_page = document[page - 1]
+            rectangle = fitz.Rect(*(float(v) for v in coordinates))
+            if not pdf_page.rect.contains(rectangle):
+                raise ValueError(f"{context}: PDF crop exceeds the physical page")
+            pixmap = pdf_page.get_pixmap(matrix=fitz.Matrix(*(float(v) for v in scales)), clip=rectangle, alpha=False)
+            regenerated = pixmap.tobytes("png")
+        if hashlib.sha256(regenerated).hexdigest() != actual_hash or regenerated != image_path.read_bytes():
+            raise ValueError(f"{context}: PNG is not the declared byte-reproducible crop of the locked PDF page")
+        return image_path
+
 
 def assert_saved_chart(chart, visual, context):
     if [category.label for category in chart.plots[0].categories] != visual["categories"]:
@@ -161,11 +212,46 @@ def placeholder(slide, idx):
     return next((s for s in slide.placeholders if s.placeholder_format.idx == idx), None)
 
 
+def layout_identity(layout):
+    return str(layout.part.partname), str(layout.slide_master.part.partname)
+
+
 def target_layout(prs, name):
-    matches = [l for l in prs.slide_layouts if l.name == name]
+    matches = [layout for master in prs.slide_masters for layout in master.slide_layouts if layout.name == name]
+    identities = {layout_identity(layout) for layout in matches}
     if not matches:
         raise ValueError(f"actual template lacks layout: {name}")
+    if len(identities) != 1:
+        raise ValueError(f"layout name is ambiguous across layout parts/masters: {name}")
     return matches[0]
+
+
+def inherited_title_font_pt(title, slide):
+    """Read explicit OOXML inheritance levels; never invent a 24 pt default."""
+    from pptx.oxml.ns import qn
+
+    candidates = [title.text_frame.paragraphs[0]] if title.text_frame.paragraphs else []
+    for paragraph in candidates:
+        for run in paragraph.runs:
+            if run.font.size is not None:
+                return run.font.size.pt
+        if paragraph.font.size is not None:
+            return paragraph.font.size.pt
+    idx = title.placeholder_format.idx
+    owners = [title]
+    layout_placeholder = placeholder(slide.slide_layout, idx)
+    if layout_placeholder is not None:
+        owners.append(layout_placeholder)
+    for owner in owners:
+        for level in owner._element.xpath("./p:txBody/a:lstStyle/a:lvl1pPr/a:defRPr"):
+            size = level.get("sz")
+            if size:
+                return int(size) / 100
+    for level in slide.slide_layout.slide_master._element.xpath("./p:txStyles/p:titleStyle/a:lvl1pPr/a:defRPr"):
+        size = level.get("sz")
+        if size:
+            return int(size) / 100
+    return None
 
 
 def native_chart(slide, visual):
@@ -191,6 +277,22 @@ def native_chart(slide, visual):
         if axis.has_title:
             axis.axis_title.text_frame.text = visual[key]
         axis.tick_labels.font.size = Pt(12)
+
+
+def native_picture(slide, visual, image_path):
+    from pptx.parts.image import Image
+
+    target = placeholder(slide, 2)
+    if target is None:
+        raise ValueError("PDF evidence image requires real placeholder idx=2")
+    pixel_width, pixel_height = Image.from_file(str(image_path)).size
+    scale = min(target.width / pixel_width, target.height / pixel_height)
+    width, height = int(pixel_width * scale), int(pixel_height * scale)
+    left, top = int(target.left + (target.width - width) / 2), int(target.top + (target.height - height) / 2)
+    target._element.getparent().remove(target._element)
+    picture = slide.shapes.add_picture(str(image_path), left, top, width=width, height=height)
+    if any(abs(getattr(picture, f"crop_{side}")) > 0.001 for side in ("left", "right", "top", "bottom")):
+        raise AssertionError("PDF evidence image must remain uncropped inside its content slot")
 
 
 def master_theme_hash(path):
@@ -220,8 +322,18 @@ def validate_content(spec):
     pages, candidates = spec["pages"], spec["candidates"]
     if len(pages) != spec["slide_count"]:
         raise ValueError("organized pages must equal fixed slide_count")
-    if sum(p.get("seconds", 0) for p in pages) > spec["time_minutes"] * 60:
-        raise ValueError("presentation time exceeds fixed duration")
+    duration = number(spec["time_minutes"], "time_minutes") * 60
+    if duration <= 0:
+        raise ValueError("time_minutes must be positive")
+    main_seconds = Decimal(0)
+    for index, page in enumerate(pages, 1):
+        seconds = number(page.get("seconds"), f"slide {index} seconds")
+        if seconds <= 0:
+            raise ValueError(f"slide {index}: seconds must be positive and finite")
+        if page.get("role") != "qa-backup":
+            main_seconds += seconds
+    if main_seconds != duration:
+        raise ValueError(f"non-backup presentation time must equal fixed duration: planned {main_seconds}s, required {duration}s")
     catalog = {c["id"]: c for c in candidates}
     if len(catalog) != len(candidates):
         raise ValueError("duplicate candidate ids")
@@ -254,8 +366,8 @@ def validate_content(spec):
         if not all(notes.get(k) for k in ("transition", "emphasis", "backup")):
             raise ValueError("speaker notes must add transition, emphasis and backup evidence")
         for visual in ([page["visual"]] if page.get("visual") else []):
-            if visual.get("kind") != "chart" or not visual.get("figure"):
-                raise ValueError("only source-data-bound native charts are accepted by this composer")
+            if visual.get("kind") not in ("chart", "image") or not visual.get("figure"):
+                raise ValueError("only source-bound native charts and reproducible PDF-page images are accepted")
     qas = {qa["id"]: qa for qa in spec.get("qa", [])}
     if not qas:
         raise ValueError("at least one sourced expected question is required")
@@ -289,11 +401,15 @@ def compose(spec_path, outdir):
         pdf_evidence.validate_source(candidate["source"], f"candidate {candidate['id']}")
     for qa in spec["qa"]:
         pdf_evidence.validate_source(qa["source"], f"Q&A {qa['id']}")
+    resolved_images = {}
     for number, page in enumerate(spec["pages"], 1):
         visual = page.get("visual")
-        if visual and visual.get("kind") == "chart":
+        if visual:
             citations = [catalog[cid]["source"] for cid in page["candidate_ids"]]
-            pdf_evidence.validate_chart(visual, citations, f"slide {number}")
+            if visual.get("kind") == "chart":
+                pdf_evidence.validate_chart(visual, citations, f"slide {number}")
+            elif visual.get("kind") == "image":
+                resolved_images[number] = pdf_evidence.validate_image(visual, citations, root, f"slide {number}")
     outdir.mkdir(parents=True, exist_ok=True)
     baseline = outdir / "organization_baseline.pptx"
     shutil.copyfile(deck, baseline)
@@ -309,24 +425,45 @@ def compose(spec_path, outdir):
             raise ValueError("actual starting deck changed since organization planning")
     else:
         raise ValueError("mode must be from-template or existing-deck-edit")
+    title_fonts = []
     for number, page in enumerate(spec["pages"], 1):
-        slide = prs.slides[number-1] if spec["mode"] == "existing-deck-edit" else prs.slides.add_slide(target_layout(prs, page["layout"]))
-        if slide.slide_layout.name != page["layout"]:
-            raise ValueError(f"slide {number}: planned layout differs from actual starting-deck layout")
+        planned_layout = target_layout(prs, page["layout"])
+        slide = prs.slides[number-1] if spec["mode"] == "existing-deck-edit" else prs.slides.add_slide(planned_layout)
+        if layout_identity(slide.slide_layout) != layout_identity(planned_layout):
+            raise ValueError(f"slide {number}: planned layout part/master differs from actual starting-deck layout")
         title, body = placeholder(slide, 0), placeholder(slide, 1)
         if title is None:
             raise ValueError(f"slide {number}: actual title placeholder missing")
+        if page.get("points") and body is None:
+            raise ValueError(f"slide {number}: body points exist but actual body placeholder is missing")
         title.text = page["claim"]
-        title_size = spec.get("title_font_pt", 28)
-        if not 24 <= title_size <= 54:
-            raise ValueError("title_font_pt must follow actual template readable policy")
-        for para in title.text_frame.paragraphs:
-            for run in para.runs:
-                run.font.size = Pt(title_size)
+        if "title_font_pt" in spec:
+            title_size = number(spec["title_font_pt"], "title_font_pt")
+            if not 24 <= title_size <= 54:
+                raise ValueError("title_font_pt must follow actual template readable policy")
+            for para in title.text_frame.paragraphs:
+                for run in para.runs:
+                    run.font.size = Pt(title_size)
+            resolved_size = float(title_size)
+            font_review = "explicit"
+        else:
+            resolved_size = inherited_title_font_pt(title, slide)
+            font_review = "resolved-inherited" if resolved_size is not None else "pending-inherited-font-size"
+        if resolved_size is not None and title.height < Pt(100) and resolved_size > 36:
+            # Compact slots use a smaller font cap without changing the template's geometry or larger title styles.
+            declared_size = resolved_size
+            for para in title.text_frame.paragraphs:
+                for run in para.runs:
+                    run.font.size = Pt(36)
+            resolved_size = 36.0
+            font_review += f"; compact-slot cap {declared_size:g}pt->36pt"
+        title_fonts.append({"slide": number, "font_pt": resolved_size, "review": font_review})
         if body is not None:
             body.text = "\n".join(page.get("points", []))
-        if page.get("visual"):
+        if page.get("visual", {}).get("kind") == "chart":
             native_chart(slide, page["visual"])
+        elif page.get("visual", {}).get("kind") == "image":
+            native_picture(slide, page["visual"], resolved_images[number])
         qa_text = []
         for qa_id in page.get("qa_ids", []):
             qa = qas[qa_id]
@@ -337,6 +474,8 @@ def compose(spec_path, outdir):
             ", ".join(f"{cid}={catalog[cid]['disposition']}" for cid in page["candidate_ids"]), "\n".join(qa_text))
         slide.notes_slide.notes_text_frame.text = note
         page["resolved_sources"] = [catalog[cid]["source"] for cid in page["candidate_ids"]]
+    if sha(source) != pdf_evidence.sha256:
+        raise ValueError("source PDF changed during composition; rebuild from one locked source version")
     temp = outdir / "organized.tmp.pptx"
     final = outdir / "organized_talk.pptx"
     prs.save(str(temp))
@@ -355,28 +494,46 @@ def compose(spec_path, outdir):
             if len(charts) != 1:
                 raise AssertionError(f"slide {number}: expected one source-bound native chart")
             assert_saved_chart(charts[0], visual, f"slide {number}")
-    render = {"status": "not-run", "limitations": ["actual final-PPTX rendering and page-by-page visual review pending"]}
-    report = {"case_id": spec["case_id"], "source_sha256": sha(source), "baseline_sha256": sha(deck), "final_sha256": sha(final),
+    pending_fonts = [item["slide"] for item in title_fonts if item["review"] == "pending-inherited-font-size"]
+    limitations = ["actual final-PPTX rendering and page-by-page visual review pending"]
+    if pending_fonts:
+        limitations.append(f"inherited title font size unresolved on slides {pending_fonts}; manual review required")
+    render = {"status": "pending", "limitations": limitations}
+    main_seconds = sum(p["seconds"] for p in spec["pages"] if p["role"] != "qa-backup")
+    backup_seconds = sum(p["seconds"] for p in spec["pages"] if p["role"] == "qa-backup")
+    report = {"case_id": spec["case_id"], "source_material": str(source), "source_sha256": sha(source),
+              "baseline_sha256": sha(deck), "final_sha256": sha(final),
               "audience_profile": spec["audience_profile"], "slide_count": len(reopened.slides),
-              "layout_names": [s.slide_layout.name for s in reopened.slides], "master_theme_preserved": True,
-              "seconds_total": sum(p["seconds"] for p in spec["pages"]), "time_limit_seconds": spec["time_minutes"] * 60,
+              "layout_names": [s.slide_layout.name for s in reopened.slides],
+              "layout_bindings": [{"slide": n, "layout_part": layout_identity(s.slide_layout)[0], "master_part": layout_identity(s.slide_layout)[1]}
+                                  for n, s in enumerate(reopened.slides, 1)],
+              "master_theme_preserved": True, "title_fonts": title_fonts,
+              "seconds_total": main_seconds, "backup_seconds_excluded": backup_seconds, "time_limit_seconds": spec["time_minutes"] * 60,
+              "source_page_ledger": pdf_evidence.page_ledger,
               "python": platform.python_version(), "python-pptx": pptx.__version__, "render": render}
+    dump(outdir / "source_page_ledger.json", {"source_sha256": pdf_evidence.sha256, "pages": pdf_evidence.page_ledger})
     dump(outdir / "content_decisions.json", {"candidates": spec["candidates"], "pages": spec["pages"]})
     dump(outdir / "qa_map.json", {"qa": spec["qa"]})
     dump(outdir / "talk_record.json", report)
     result = dict(spec["output_contract"])
-    if "case_id" not in result:
-        raise ValueError("materialized output_contract must include case_id")
-    result["case_id"] = spec["case_id"]
+    if "case_id" not in result or result["case_id"] != spec["case_id"]:
+        raise ValueError("materialized output_contract case_id must match and remain unchanged")
     values = {"status": "partial", "artifacts": [str(final)], "primary_result": str(final), "output": str(final),
               "sources": [spec["source_material"]], "uncertainty": spec.get("uncertainty", []) + render["limitations"],
               "render": render, "validation": render, "qa": spec["qa"], "decisions": spec["candidates"]}
     for key, value in values.items():
         if key not in result:
             continue
-        if result[key] is not None and not isinstance(value, type(result[key])):
+        if result[key] is not None and type(value) is not type(result[key]):
             raise TypeError(f"contract field {key} changed type")
-        result[key] = value
+        if key in ("render", "validation") and isinstance(result[key], dict):
+            merged = dict(result[key])
+            merged.update(value)
+            result[key] = merged
+        elif key == "uncertainty" and isinstance(result[key], list):
+            result[key] = result[key] + [item for item in value if item not in result[key]]
+        else:
+            result[key] = value
     dump(outdir / "result.json", result)
     print(json.dumps({"pptx": str(final), "slides": len(reopened.slides), "qa": len(qas), "status": "structure-passed-render-pending"}, ensure_ascii=False))
 

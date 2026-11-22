@@ -15,7 +15,7 @@ description: Parse publisher and source-formula MathML into source-linked LaTeX 
 
 读取 `/input/case.json`、`task.md`、`environment/resources.yaml`、实际两个 XML 和可选 `material_path`。XML 用真实解析器读取，不通过文件名猜学科公式。
 
-Agent 在 `/app/work/analysis.json` 写：
+Agent 在 `/app/work/formula-analysis.json` 写（脚本无 `--candidate` 时读取此默认路径）：
 
 - `variables[]`：`symbol/definition/unit/range/paragraph_id/quote`，`definition_kind` 为 `reported/context_inference/common_knowledge/not_reported`；reported 必须原文回链。
 - `evaluations[]`：表达式、非空 `inputs`、单位说明、expected 与事先绝对容差（如任务有）。只能字面数值和已给变量的加減乘除幂/一元正负，禁止函数、导入和任意执行。
@@ -34,8 +34,8 @@ Agent 在 `/app/work/analysis.json` 写：
 
 ## 状态、输出和恢复
 
-- `success`：公式恢复、变量来源和可选数值核验无失败。
-- `partial/insufficient_evidence`/退出 2：无公式对象、缺数据、值计算失败或 publisher ID 缺失。保留已恢复 XML/LaTeX 和可人工接管的 formula ID。
+- `success`：公式恢复、变量来源和可选数值核验无失败，且没有 MathML 解析 warning。
+- `partial/insufficient_evidence`/退出 2：无公式对象、缺数据、值计算失败、publisher ID 缺失、未可靠建模/畸形 MathML 或输出合同字段/类型不匹配。保留已恢复 XML/LaTeX、候选指标计算和可人工接管的 formula ID，不因缺 XML 清空其他可核对结果。
 - XML 损坏、模糊图片、歧义符号或单位缺失各自说明，不把它们写成“原文无公式”。
 - `trace.json` 记录实际版本、MathML 子集边界和变更，不生成全研究复现声明。
 
@@ -48,7 +48,7 @@ Agent 在 `/app/work/analysis.json` 写：
 ```bash
 python3 /skills/weekly-skill/scripts/workflow.py --case /app/work/formula-case.json \
   --task /app/work/task.md --input-dir /app/work --work /app/work/run --output /app/output \
-  --candidate /app/work/analysis.json
+  --candidate /app/work/formula-analysis.json
 ```
 
 示意输出：`formulas[0].latex="\frac{a}{b}"`、source_id=`eq1`、computed=`2.0`。C02 无 math 时输出 insufficient，不生成该式。

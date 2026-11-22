@@ -19,8 +19,35 @@ def page_lines(path):
     return pages
 
 
+def page_ledger(path, pages=None):
+    """Inventory every physical page; never treat empty extraction as read evidence."""
+    import hashlib
+
+    try:
+        import fitz
+    except ImportError:
+        raise ValueError("dependency-blocked: PyMuPDF is required to inventory source PDF pages")
+    pages = pages if pages is not None else page_lines(path)
+    rows = []
+    with fitz.open(str(path)) as document:
+        for number, page in enumerate(document, 1):
+            text = "\n".join(pages[number - 1])
+            empty = not bool(text)
+            rows.append({"pdf_page": number, "text_lines": len(pages[number - 1]),
+                         "text_characters": len(text), "image_count": len(page.get_images(full=True)),
+                         "empty_text": empty, "ocr_pending": empty,
+                         "status": "ocr-pending-or-empty-review" if empty else "text-extracted"})
+    return {"source_pdf_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "physical_pages": len(rows), "pages": rows,
+            "empty_text_pages": [row["pdf_page"] for row in rows if row["empty_text"]],
+            "ocr_pending_pages": [row["pdf_page"] for row in rows if row["ocr_pending"]],
+            "limitation": "Text extraction is not OCR; unread empty/scanned pages require actual OCR and review."}
+
+
 def validate_citation(pdf_path, source, context, pages=None):
     pages = pages if pages is not None else page_lines(pdf_path)
+    if not isinstance(source, dict):
+        raise ValueError(f"{context}: each source citation must be an object")
     page = source.get("pdf_page")
     quote = source.get("quote")
     if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= len(pages):
@@ -49,6 +76,10 @@ def validate_citation(pdf_path, source, context, pages=None):
 
 def validate_chart(pdf_path, visual, citations, context):
     pages = page_lines(pdf_path)
+    if not isinstance(citations, list) or not citations or not all(isinstance(item, dict) for item in citations):
+        raise ValueError(f"{context}: chart requires at least one exact PDF citation")
+    if not isinstance(visual, dict):
+        raise ValueError(f"{context}: chart visual must be an object")
     source = visual.get("source")
     if not isinstance(source, dict):
         raise ValueError(f"{context}: chart requires a PDF structured-record source")
@@ -58,7 +89,7 @@ def validate_chart(pdf_path, visual, citations, context):
     if not any(item.get("pdf_page") == page and item.get("figure") and prefix == item["figure"] + " data:" for item in citations):
         raise ValueError(f"{context}: chart source must match a cited figure on the same physical PDF page")
     records = []
-    for line in pages[page - 1]:
+    for line_number, line in enumerate(pages[page - 1], 1):
         if not line.startswith(prefix):
             continue
         fields = {}
@@ -75,6 +106,8 @@ def validate_chart(pdf_path, visual, citations, context):
             raise ValueError(f"{context}: PDF chart value is not numeric")
         if not fields["value"].is_finite():
             raise ValueError(f"{context}: PDF chart value must be finite")
+        fields["pdf_page"] = page
+        fields["text_line"] = line_number
         records.append(fields)
     if not records:
         raise ValueError(f"{context}: no structured chart records on PDF p.{page}")
@@ -96,7 +129,7 @@ def validate_chart(pdf_path, visual, citations, context):
     if visual.get("categories") != categories:
         raise ValueError(f"{context}: chart categories differ from PDF structured records")
     actual_series = visual.get("series")
-    if not isinstance(actual_series, list) or [item.get("name") for item in actual_series] != list(expected):
+    if not isinstance(actual_series, list) or not all(isinstance(item, dict) for item in actual_series) or [item.get("name") for item in actual_series] != list(expected):
         raise ValueError(f"{context}: chart series names differ from PDF structured records")
     for item in actual_series:
         name = item["name"]
@@ -114,3 +147,6 @@ def validate_chart(pdf_path, visual, citations, context):
     expected_axis = f"{first_series} ({unit})" if len(expected) == 1 else f"Value ({unit})"
     if visual.get("y_title") != expected_axis:
         raise ValueError(f"{context}: value-axis title must exactly bind the source measure and unit")
+    return [{"pdf_page": record["pdf_page"], "text_line": record["text_line"],
+             "series": record["series"], "category": record["category"],
+             "unit": record["unit"], "value": str(record["value"])} for record in records]

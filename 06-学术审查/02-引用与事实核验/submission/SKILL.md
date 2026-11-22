@@ -40,11 +40,23 @@ description: 逐条拆分科研稿件原子论断并核验引文语义支持、�
 完整限定词、作者明确承认的短板、不同亚组/时点/分母、标准误与标准差、比例与百分比、预印本明确标版均是合理写法。预印本不自动低质量；仅摘要可支持摘要中实际可见主张，超出的部分仍未核实。版本冲突并列而非选择有利版本，证据不足降为待复核；支持矩阵允许零问题。
 
 ## 确定性比对工具
-作者环境实测 `/usr/bin/python3` 为 Python 3.9.6；脚本仅依赖标准库 `argparse/decimal/json/pathlib/sys`，不联网、不需安装。将真实人工全文核验得到的结构化 `/app/work/claim_review.json` 运行：
+脚本只依赖 Python 3 标准库，不联网、不需安装，测试资源仅在本题目录。真实运行时，先把人工阅读真实材料形成的 `/app/work/claim_review.json` 写好，再执行：
 ```sh
-python3 /skills/weekly-skill/scripts/check_claims.py /app/work/claim_review.json > /app/work/citation_validation.json
+python3 /skills/weekly-skill/scripts/check_claims.py \
+  --case /input/case.json --task /input/task.md \
+  --review /app/work/claim_review.json --output /app/output/result.json
 ```
-工具验证四级结论及来源证据的必要条件、稿件/来源原句唯一性、缺失来源只能 `undetermined`、覆盖范围一致；对已人工标注同一 `metric/population/time/unit/measure_kind` 的数值才用 `Decimal` 比较。输出 `numerical_consistency_candidates` 只是复核候选，不是自动缺陷。退出 0 为结构通过，2 为输入/证据校验失败。
+脚本逐字读取真实 `case_id`、`output_contract`、任务和案例声明的本地允许材料；也可只用显式 `--material` 允许的本地文件。先落诚实的 `partial` 结果，再映射真实合同字段并递归检查 `required/type/enum/items`（含嵌套对象和数组）。合同不合规、材料或审查读取失败均保留 `partial` 并非零退出；不会把 `fixture_id` 当真实结果。诊断只写入合同已声明的 limitations/issues 类数组，不覆盖业务 findings。
+
+结构化审查中的每个来源必须含 `version/publication_status/retraction_status/availability/text`，以及与所供文本实际 SHA-256 一致的 `snapshot.sha256/media_type`；有 DOI 时统一去 `https://doi.org/` 或 `doi:` 前缀并小写核对，无 DOI 不得补造。每个 claim 用非空 `citation_ids` 和 `evidence[]` 绑定已登记来源；每条证据含 `source_id/quote/location/role(supports|contradicts|context)`，多来源另填 `source_relationship`。稿件与来源双側 location 至少含真实 `page/paragraph/line` 之一，声明 line 会与唯一逐字摘录的实际行核对。`alignment=aligned` 不能替代证据；矛盾角色不能判完整支持，不支持必须有矛盾证据而非缺源。
+
+工具检查四级结论的结构必要条件、快照、双侧原句唯一性、来源绑定、缺失来源只能 `undetermined` 和覆盖一致性；空 claims/findings、仅摘要、缺源及未使用来源输出明确 issue 和 `partial`。对已人工标注同一 `metric/population/time/unit/measure_kind` 的数值才用 `Decimal` 比较；候选不是自动缺陷。退出 0 为结构通过，1 为诚实部分完成，2 为输入、证据或真实合同失败。
+
+保留非官方合成测试路径（旧的位置参数也兼容）：
+```sh
+python3 /skills/weekly-skill/scripts/check_claims.py --candidate /app/work/synthetic_candidate.json
+```
+这些检查只核对所供文本的结构与一致性，不把语义判断、DOI 语法或快照哈希冒充 DOI 存在性、全文事实真理或外部撤稿核验。
 
 ## 输出、恢复与完成边界
 尽早保存诚实的部分 `/app/output/result.json`，使用真实 `case_id` 和 `output_contract` **全部原字段**，不新增猜测字段。保留论断—证据表、原始输出、实际日志、版本、状态和不确定性，并区分通过/问题/待复核/未检查。辅助结果和最终 JSON 一致；仅实际生成 Office/slide/diagram 可编辑产物时附真实预览。

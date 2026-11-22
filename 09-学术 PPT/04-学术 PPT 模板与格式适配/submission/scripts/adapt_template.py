@@ -24,9 +24,10 @@ try:
 except ImportError:
     raise SystemExit("dependency-blocked: install python-pptx>=1.0 from resources.yaml")
 
-from pdf_evidence import validate_chart, validate_citation
+from pdf_evidence import page_ledger, page_lines, validate_chart, validate_citation
 
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 
 
 def dump(path, value):
@@ -39,6 +40,33 @@ def sha(path):
 
 def ph(slide, idx):
     return next((s for s in slide.placeholders if s.placeholder_format.idx == idx), None)
+
+
+def all_layouts(prs):
+    return [layout for master in prs.slide_masters for layout in master.slide_layouts]
+
+
+def layout_part(layout):
+    return str(layout.part.partname)
+
+
+def master_part(layout):
+    return str(layout.slide_master.part.partname)
+
+
+def select_layout(prs, page, context):
+    """Bind a layout by part and master; a display name alone is not unique."""
+    expected_part = page.get("layout_part")
+    expected_master = page.get("layout_master")
+    matches = [layout for layout in all_layouts(prs) if layout.name == page.get("layout")
+               and (expected_part is None or layout_part(layout) == expected_part)
+               and (expected_master is None or master_part(layout) == expected_master)]
+    if not matches:
+        raise ValueError(f"{context}: requested layout part/master is absent")
+    identities = {(layout_part(layout), master_part(layout)) for layout in matches}
+    if len(identities) != 1:
+        raise ValueError(f"{context}: ambiguous layout name; require unique layout_part and layout_master")
+    return matches[0]
 
 
 def template_internals(path):
@@ -119,14 +147,97 @@ def text_units(text):
     return sum(1 if ord(ch) > 255 else 0.56 for ch in text)
 
 
+def _size_from_defrpr(parent):
+    if parent is None:
+        return None
+    node = parent.find(A + "defRPr")
+    if node is None or not node.get("sz"):
+        return None
+    try:
+        value = int(node.get("sz")) / 100
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _list_style_size(tx_body, level):
+    if tx_body is None:
+        return None
+    styles = tx_body.find(A + "lstStyle")
+    if styles is None:
+        return None
+    return _size_from_defrpr(styles.find(A + f"lvl{level}pPr"))
+
+
+def _placeholder_for(shape, layout_or_master):
+    if not shape.is_placeholder:
+        return None
+    idx = shape.placeholder_format.idx
+    return next((item for item in layout_or_master.placeholders
+                 if item.placeholder_format.idx == idx), None)
+
+
+def resolve_run_font_size(run, para, shape, prs):
+    """Resolve only explicit OOXML sizes; unresolved inheritance stays pending."""
+    direct = run.font.size
+    if direct is not None:
+        return direct.pt, "explicit-run"
+    ppr = para._p.find(A + "pPr")
+    size = _size_from_defrpr(ppr)
+    if size is not None:
+        return size, "explicit-paragraph-default"
+    level = 1
+    if ppr is not None and ppr.get("lvl"):
+        try:
+            level = int(ppr.get("lvl")) + 1
+        except ValueError:
+            return None, "unresolved-invalid-level"
+    if not 1 <= level <= 9:
+        return None, "unresolved-invalid-level"
+    size = _list_style_size(shape.text_frame._txBody, level)
+    if size is not None:
+        return size, "inherited-shape-list-style"
+    layout = shape.part.slide_layout
+    layout_placeholder = _placeholder_for(shape, layout)
+    if layout_placeholder is not None:
+        size = _list_style_size(layout_placeholder.text_frame._txBody, level)
+        if size is not None:
+            return size, "inherited-layout-placeholder"
+    master = layout.slide_master
+    master_placeholder = _placeholder_for(shape, master)
+    if master_placeholder is not None:
+        size = _list_style_size(master_placeholder.text_frame._txBody, level)
+        if size is not None:
+            return size, "inherited-master-placeholder"
+    if shape.is_placeholder:
+        style_name = "titleStyle" if shape.placeholder_format.idx == 0 else "bodyStyle"
+    else:
+        style_name = "otherStyle"
+    tx_styles = master._element.find(P + "txStyles")
+    style_node = tx_styles.find(A + style_name) if tx_styles is not None else None
+    size = _size_from_defrpr(style_node.find(A + f"lvl{level}pPr")) if style_node is not None else None
+    if size is not None:
+        return size, f"inherited-master-{style_name}"
+    defaults = prs.part._element.find(P + "defaultTextStyle")
+    if defaults is not None:
+        size = _size_from_defrpr(defaults.find(A + f"lvl{level}pPr"))
+        if size is not None:
+            return size, "inherited-presentation-default"
+    return None, "unresolved-review-required"
+
+
 def audit_presentation(path, pages, style):
     prs = Presentation(str(path))
     rows, issues = [], []
     for number, slide in enumerate(prs.slides, 1):
         planned = pages[number-1]
-        row = {"slide": number, "layout": slide.slide_layout.name, "planned_layout": planned["layout"], "shapes": [], "overflow_estimates": [], "issues": []}
-        if slide.slide_layout.name != planned["layout"]:
-            issues.append(f"slide {number}: wrong actual layout inheritance")
+        expected_layout = select_layout(prs, planned, f"slide {number}")
+        actual_layout = slide.slide_layout
+        row = {"slide": number, "layout": actual_layout.name, "layout_part": layout_part(actual_layout),
+               "layout_master": master_part(actual_layout), "planned_layout": planned["layout"],
+               "shapes": [], "overflow_estimates": [], "font_size_review_pending": [], "issues": []}
+        if layout_part(actual_layout) != layout_part(expected_layout) or master_part(actual_layout) != master_part(expected_layout):
+            issues.append(f"slide {number}: wrong actual layout part/master inheritance")
         for shape in slide.shapes:
             entry = {"name": shape.name, "box": [shape.left, shape.top, shape.width, shape.height],
                      "editable_text": shape.has_text_frame, "native_chart": shape.has_chart,
@@ -146,17 +257,30 @@ def audit_presentation(path, pages, style):
                 frame = shape.text_frame
                 width = max(1, shape.width/12700 - 20)
                 height = max(1, shape.height/12700 - 12)
-                used, sizes = 0, []
-                for para in frame.paragraphs:
-                    points = [r.font.size.pt for r in para.runs if r.font.size]
-                    size = max(points, default=24)
+                used, sizes, size_sources = 0, [], []
+                unresolved = False
+                for para_number, para in enumerate(frame.paragraphs, 1):
+                    resolved = [resolve_run_font_size(run, para, shape, prs) for run in para.runs]
+                    points = [size for size, source in resolved if size is not None]
                     sizes.extend(points)
+                    size_sources.extend(source for size, source in resolved if size is not None)
+                    missing = [run.text for run, (size, source) in zip(para.runs, resolved) if size is None]
+                    if missing or (para.text and not para.runs):
+                        unresolved = True
+                        row["font_size_review_pending"].append({"shape": shape.name, "paragraph": para_number,
+                                                               "runs": missing or [para.text]})
+                    if not points:
+                        continue
+                    size = max(points)
                     rows_needed = max(1, math.ceil(text_units(para.text) / max(1, width / (size*0.58))))
                     used += rows_needed * size * 1.25 + 6
                 entry["font_sizes_pt"] = sizes
+                entry["font_size_sources"] = sorted(set(size_sources))
                 if any(v < style["min_font_pt"] for v in sizes):
-                    issues.append(f"slide {number}: explicit font below case style minimum")
-                if used > height:
+                    issues.append(f"slide {number}: explicit or inherited font below case style minimum")
+                if unresolved:
+                    issues.append(f"slide {number}: font size inheritance unresolved in {shape.name}; review required")
+                elif used > height:
                     row["overflow_estimates"].append({"shape": shape.name, "estimated_pt": round(used), "available_pt": round(height)})
                     issues.append(f"slide {number}: estimated overflow in {shape.name}")
             row["shapes"].append(entry)
@@ -197,7 +321,8 @@ def style_safe(value, minimum):
     return value
 
 
-def fill_source_figure(slide, visual, root):
+def fill_source_figure(slide, visual, root, work, source_pdf, context):
+    import fitz
     from PIL import Image
     target = ph(slide, 2)
     if target is None:
@@ -205,14 +330,37 @@ def fill_source_figure(slide, visual, root):
     path = (root / visual["path"]).resolve()
     if root.resolve() not in path.parents or not path.is_file():
         raise ValueError("source figure must be an actual extracted file inside the case workspace")
-    with Image.open(path) as image:
+    page_number = visual.get("source_pdf_page")
+    crop = visual.get("source_pdf_crop")
+    if isinstance(page_number, bool) or not isinstance(page_number, int):
+        raise ValueError(f"{context}: source figure requires a physical PDF page")
+    if not isinstance(crop, list) or len(crop) != 4 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in crop):
+        raise ValueError(f"{context}: source figure requires four finite PDF crop coordinates")
+    figure_dir = work / "source-figures"
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    with fitz.open(str(source_pdf)) as document:
+        if not 1 <= page_number <= len(document):
+            raise ValueError(f"{context}: source figure PDF page is outside the actual document")
+        page = document[page_number - 1]
+        clip = fitz.Rect(*crop)
+        if clip.is_empty or clip.is_infinite or not page.rect.contains(clip):
+            raise ValueError(f"{context}: source figure crop must be nonempty and inside the physical PDF page")
+        digest = hashlib.sha256((sha(source_pdf) + json.dumps(crop)).encode()).hexdigest()[:16]
+        recropped = figure_dir / f"pdf-p{page_number}-{digest}.png"
+        page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=clip, alpha=False).save(str(recropped))
+    if sha(path) != sha(recropped):
+        raise ValueError(f"{context}: supplied PNG does not equal the crop regenerated from the current source PDF")
+    with Image.open(recropped) as image:
         ratio = min(target.width / image.width, target.height / image.height)
         width, height = int(image.width * ratio), int(image.height * ratio)
-    picture = slide.shapes.add_picture(str(path), target.left + (target.width-width)//2,
+    picture = slide.shapes.add_picture(str(recropped), target.left + (target.width-width)//2,
                                        target.top + (target.height-height)//2, width=width, height=height)
-    picture.name = f"PDF p.{visual['source_pdf_page']} {visual.get('figure', 'source figure')}"
+    picture.name = f"PDF p.{page_number} {visual.get('figure', 'source figure')}"
     picture.crop_left = picture.crop_right = picture.crop_top = picture.crop_bottom = 0
-    return picture
+    evidence = {"context": context, "source_pdf_sha256": sha(source_pdf), "pdf_page": page_number,
+                "crop_rect_pdf_points": crop, "recropped_png": str(recropped), "png_sha256": sha(recropped),
+                "validation_scope": "current-build PDF-to-PNG binding only; no official source hash claimed"}
+    return picture, evidence
 
 
 def adapt(spec_path, outdir, work):
@@ -227,6 +375,9 @@ def adapt(spec_path, outdir, work):
         raise FileNotFoundError("actual source, editable template and starting deck are required")
     if sha(start) != spec["original_sha256"]:
         raise ValueError("starting deck changed after template probe")
+    for key, actual in (("source_sha256", source), ("template_sha256", template)):
+        if key in spec and sha(actual) != spec[key]:
+            raise ValueError(f"{key} does not match the current file; rebuild or explicitly review the new version")
     original_theme = template_internals(template)
     starting_theme = template_internals(start)
     if original_theme["master_theme_sha256"] != starting_theme["master_theme_sha256"] and spec["mode"] != "migrate-to-template":
@@ -244,6 +395,8 @@ def adapt(spec_path, outdir, work):
     outdir.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
     dump(outdir / "font_report.json", fonts)
+    source_pages = page_lines(source)
+    dump(outdir / "source_pdf_ledger.json", page_ledger(source, source_pages))
     if missing or not fonts["probe"]:
         raise ValueError("required font availability unresolved: " + ", ".join(missing + ([] if fonts["probe"] else ["no font probe"])))
     source_prs = Presentation(str(start))
@@ -272,18 +425,22 @@ def adapt(spec_path, outdir, work):
     shutil.copyfile(start, work / "starting_baseline.pptx")
     template_probe = {"template_sha256": sha(template), "starting_sha256": sha(start), "mode": spec["mode"],
                       "starting_internals": starting_theme, "slide_dimensions": [prs.slide_width, prs.slide_height],
-                      **template_internals(template), "layouts": [{"name": l.name, "part": l.part.partname, "master": l.slide_master.part.partname,
-                      "placeholders": [{"idx": p.placeholder_format.idx, "type": str(p.placeholder_format.type), "box": [p.left, p.top, p.width, p.height]} for p in l.placeholders]} for l in prs.slide_layouts]}
+                      **template_internals(template), "layouts": [{"name": l.name, "part": layout_part(l), "master": master_part(l),
+                      "placeholders": [{"idx": p.placeholder_format.idx, "type": str(p.placeholder_format.type), "box": [p.left, p.top, p.width, p.height]} for p in l.placeholders]} for l in all_layouts(prs)]}
     dump(outdir / "template_probe.json", template_probe)
+    figure_evidence, chart_evidence = [], []
     for number, page in enumerate(spec["pages"], 1):
-        for src in page.get("sources", []):
-            validate_citation(source, src, f"slide {number}")
+        if not isinstance(page.get("sources"), list) or not page["sources"]:
+            raise ValueError(f"slide {number}: at least one exact PDF source citation is required")
+        for src in page["sources"]:
+            validate_citation(source, src, f"slide {number}", source_pages)
         notes = page.get("notes", {})
         if not all(notes.get(k) for k in ("transition", "emphasis", "backup")):
             raise ValueError(f"slide {number}: complementary notes required")
-        slide = prs.slides[number-1] if spec["mode"] == "existing-deck-edit" else prs.slides.add_slide(next(l for l in prs.slide_layouts if l.name == page["layout"]))
-        if slide.slide_layout.name != page["layout"]:
-            raise ValueError(f"slide {number}: actual layout not the content-mapped layout")
+        selected_layout = select_layout(prs, page, f"slide {number}")
+        slide = prs.slides[number-1] if spec["mode"] == "existing-deck-edit" else prs.slides.add_slide(selected_layout)
+        if layout_part(slide.slide_layout) != layout_part(selected_layout) or master_part(slide.slide_layout) != master_part(selected_layout):
+            raise ValueError(f"slide {number}: actual layout part/master is not the content-mapped layout")
         title, body = ph(slide, 0), ph(slide, 1)
         if title is None:
             raise ValueError(f"slide {number}: title slot unavailable")
@@ -300,10 +457,14 @@ def adapt(spec_path, outdir, work):
                     run.font.size = Pt(style["body_font_pt"])
         if page.get("visual"):
             if page["visual"].get("kind") == "chart":
-                validate_chart(source, page["visual"], page.get("sources", []), f"slide {number}")
+                records = validate_chart(source, page["visual"], page["sources"], f"slide {number}")
+                chart_evidence.append({"slide": number, "records": records})
                 fill_chart(slide, page["visual"])
             elif page["visual"].get("kind") == "figure" and isinstance(page["visual"].get("source_pdf_page"), int):
-                fill_source_figure(slide, page["visual"], root)
+                if not any(src.get("pdf_page") == page["visual"]["source_pdf_page"] and src.get("figure") == page["visual"].get("figure") for src in page["sources"]):
+                    raise ValueError(f"slide {number}: source figure must match a cited figure on the same physical PDF page")
+                _, evidence = fill_source_figure(slide, page["visual"], root, work, source, f"slide {number}")
+                figure_evidence.append(evidence)
             else:
                 raise ValueError("visual must be source-bound native chart or actual extracted figure with PDF page")
         slide.notes_slide.notes_text_frame.text = "Transition: {}\nEmphasis: {}\nExtra evidence: {}".format(notes["transition"], notes["emphasis"], notes["backup"])
@@ -322,6 +483,8 @@ def adapt(spec_path, outdir, work):
     if issues:
         raise ValueError("batch adaptation blocked; see page_deviations.json: " + issues[0])
     candidate.replace(final)
+    dump(outdir / "source_figure_evidence.json", {"figures": figure_evidence})
+    dump(outdir / "chart_evidence.json", {"charts": chart_evidence})
     render = {"status": "not-run", "limitations": ["final PPTX actual render and per-page visual/font/crop inspection pending"]}
     dump(outdir / "adaptation_record.json", {"case_id": spec["case_id"], "source_sha256": sha(source), "template_sha256": sha(template),
          "starting_sha256": sha(start), "final_sha256": sha(final), "slides": len(reopened.slides), "python": platform.python_version(),

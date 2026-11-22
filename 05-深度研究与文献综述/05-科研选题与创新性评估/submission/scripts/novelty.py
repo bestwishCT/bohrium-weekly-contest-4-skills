@@ -56,6 +56,9 @@ def validate(data, sources, tools, evidence, base):
             errors.append(eid + " supports nearest-work comparison from a non-included record")
     claims = unique_ids(d.get("atomic_claims", []), "atomic novelty claim", errors)
     coverage_by_claim = {}
+    claim_evidence = {}
+    malformed_neighbor = False
+    search_by_tool = {search.get("tool_run_id"): sid for sid, search in searches.items()}
     for cid, claim in claims.items():
         if claim.get("type") not in {"method", "data", "context_transfer", "conclusion_revision"}:
             errors.append(cid + " must classify method/data/context-transfer/conclusion-revision increment")
@@ -64,8 +67,18 @@ def validate(data, sources, tools, evidence, base):
         if claim.get("global_novelty_claimed") is not False or not claim.get("bounded_statement"):
             errors.append(cid + " must explicitly reject an unsupported global novelty claim")
         neighbors = claim.get("neighbors", [])
+        if not isinstance(neighbors, list):
+            warnings.append(cid + " neighbors must be an array; coverage is degraded")
+            malformed_neighbor = True
+            neighbors = []
         seen_states = set()
+        linked_evidence = set()
+        valid_neighbors = 0
         for neighbor in neighbors:
+            if not isinstance(neighbor, dict):
+                warnings.append(cid + " has a non-object neighbor; it was excluded from coverage")
+                malformed_neighbor = True
+                continue
             rid = neighbor.get("record_id")
             if rid not in included:
                 errors.append(cid + " nearest work is absent or ineligible")
@@ -73,21 +86,45 @@ def validate(data, sources, tools, evidence, base):
             state = neighbor.get("coverage")
             if state not in COVERAGE:
                 errors.append(cid + " neighbor has invalid coverage state")
-            seen_states.add(state)
+            else:
+                seen_states.add(state)
+            valid_neighbors += 1
             for field in ("shared", "remaining_difference", "comparison_limits"):
                 if not neighbor.get(field):
                     errors.append(cid + " nearest-work comparison lacks " + field)
             refs(cid, neighbor.get("evidence_ids"), evidence, "evidence", errors)
             for evidence_id in neighbor.get("evidence_ids") or []:
+                linked_evidence.add(evidence_id)
                 if evidence_id in evidence and evidence[evidence_id].get("record_id") != rid:
                     errors.append(cid + " nearest-work evidence record_id mismatch: " + evidence_id)
+        claim_evidence[cid] = linked_evidence
+        declared_search_ids = claim.get("search_ids")
+        if declared_search_ids is not None:
+            refs(cid, declared_search_ids, searches, "atomic-claim search", errors)
+        evidence_search_ids = {search_by_tool[evidence[eid]["tool_run_id"]] for eid in linked_evidence
+                               if eid in evidence and evidence[eid].get("tool_run_id") in search_by_tool}
+        bound_search_ids = set(declared_search_ids) if isinstance(declared_search_ids, list) else evidence_search_ids
+        if declared_search_ids is not None and not evidence_search_ids <= bound_search_ids:
+            errors.append(cid + " neighbor evidence comes from an unbound search")
         overall = claim.get("overall_coverage")
-        if "fully_covered" in seen_states and overall != "fully_covered":
-            errors.append(cid + " hides direct full coverage by a nearest work")
-        if neighbors and "fully_covered" not in seen_states and "partially_covered" in seen_states and overall == "not_directly_covered_in_scope":
-            errors.append(cid + " erases partial coverage")
-        if overall == "not_directly_covered_in_scope" and (not executed_scope or not claim.get("scope_limited_rationale")):
-            errors.append(cid + " cannot claim no direct coverage without executed scope and qualified rationale")
+        if valid_neighbors:
+            if "fully_covered" in seen_states:
+                expected = "fully_covered"
+            elif "partially_covered" in seen_states:
+                expected = "partially_covered"
+            elif "unknown" in seen_states:
+                expected = "unknown"
+            else:
+                expected = "not_directly_covered_in_scope"
+            if overall != expected:
+                errors.append(cid + " overall_coverage must be derived from its neighbors as " + expected)
+        elif overall in {"fully_covered", "partially_covered"}:
+            errors.append(cid + " cannot derive direct/partial coverage without valid neighbors")
+        bound_scope = [searches[sid] for sid in bound_search_ids if sid in searches and searches[sid].get("executed") is True]
+        if overall != "unknown" and not bound_scope:
+            errors.append(cid + " lacks an executed search bound to this atomic claim")
+        if overall == "not_directly_covered_in_scope" and (not bound_scope or not claim.get("scope_limited_rationale")):
+            errors.append(cid + " cannot claim no direct coverage without claim-bound executed scope and qualified rationale")
         if overall == "unknown" and not claim.get("coverage_rationale"):
             errors.append(cid + " unknown coverage needs its cause")
         increment = claim.get("increment_label")
@@ -140,9 +177,34 @@ def validate(data, sources, tools, evidence, base):
         errors.append("feasibility needs failure, observable stop/turn and recommendation-invalidation conditions")
     conflicts = data.get("conflicts", [])
     for conflict in conflicts:
-        refs("conflict", conflict.get("evidence_ids"), evidence, "evidence", errors, minimum=2)
-        if not conflict.get("supporting_and_opposing") or not conflict.get("comparison_limits"):
+        label = conflict.get("id", "conflict")
+        conflict_evidence = set(conflict.get("evidence_ids") or [])
+        refs(label, conflict.get("evidence_ids"), evidence, "evidence", errors, minimum=2)
+        roles = conflict.get("supporting_and_opposing")
+        if not isinstance(roles, dict) or not conflict.get("comparison_limits"):
             errors.append("novelty conflict must retain support/opposition and comparison limits")
+            roles = {}
+        supporting = roles.get("supporting")
+        opposing = roles.get("opposing")
+        if not isinstance(supporting, list) or not supporting or not isinstance(opposing, list) or not opposing:
+            errors.append(label + " needs non-empty supporting and opposing evidence lists")
+            supporting, opposing = supporting or [], opposing or []
+        refs(label, supporting, evidence, "supporting evidence", errors)
+        refs(label, opposing, evidence, "opposing evidence", errors)
+        if set(supporting) & set(opposing) or set(supporting) | set(opposing) != conflict_evidence:
+            errors.append(label + " supporting/opposing roles must partition evidence_ids")
+        cid = conflict.get("claim_id")
+        candidates = {claim_id for claim_id, linked in claim_evidence.items() if conflict_evidence <= linked}
+        if cid is None and len(candidates) == 1:
+            cid = next(iter(candidates))
+        if cid not in claims:
+            errors.append(label + " must bind to exactly one atomic claim")
+            continue
+        if candidates != {cid} or not conflict_evidence <= claim_evidence.get(cid, set()):
+            errors.append(label + " evidence is not bound to atomic claim " + cid)
+        for evidence_id in supporting + opposing:
+            if evidence_id not in claim_evidence.get(cid, set()):
+                errors.append(label + " role evidence is unrelated to atomic claim " + cid + ": " + evidence_id)
     gaps = d.get("gaps", [])
     for gap in gaps:
         refs(gap.get("id", "gap"), gap.get("basis_evidence_ids"), evidence, "evidence", errors)
@@ -157,6 +219,7 @@ def validate(data, sources, tools, evidence, base):
     audit = {"problem": problem, "executed_search_scope": executed_scope, "nearest_work": list(records.values()),
              "atomic_claims": list(claims.values()), "assumptions": list(assumptions.values()),
              "feasibility": feasibility, "conflicts": conflicts, "gaps": gaps, "warnings": warnings,
+             "partial": malformed_neighbor,
              "coverage_boundary": "not directly covered in the actual supplied scope is not global novelty"}
     return derived, audit, errors
 

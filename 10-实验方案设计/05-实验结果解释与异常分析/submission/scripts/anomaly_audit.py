@@ -12,6 +12,80 @@ SCHEMA = "experiment-anomaly-audit-v1"
 EVIDENCE_RANK = {"direct_observation": 0, "association": 1, "hypothesis": 2}
 
 
+def valid_id(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def list_of_objects(value, at, errors):
+    if not isinstance(value, list):
+        errors.append({"code": "OBJECT_LIST_REQUIRED", "at": at})
+        return []
+    output = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            errors.append({"code": "OBJECT_LIST_ITEM_INVALID", "at": at, "index": index})
+        else:
+            output.append(item)
+    return output
+
+
+def validate_ids(items, at, errors):
+    seen = {}
+    for index, item in enumerate(items):
+        value = item.get("id")
+        location = f"{at}[{index}].id"
+        if not valid_id(value):
+            errors.append({"code": "ID_MISSING_OR_INVALID", "at": location, "value": value})
+            continue
+        if value in seen:
+            errors.append({"code": "DUPLICATE_ID", "at": location, "id": value, "first_index": seen[value], "duplicate_index": index})
+        else:
+            seen[value] = index
+
+
+def source_key(reference):
+    if not isinstance(reference, dict) or not valid_id(reference.get("file")):
+        return None
+    row = reference.get("row")
+    if isinstance(row, bool) or not isinstance(row, (int, str)) or (isinstance(row, str) and not row.strip()):
+        return None
+    sheet = reference.get("sheet")
+    if sheet is not None and not isinstance(sheet, str):
+        return None
+    return reference["file"], sheet, row
+
+
+def source_index(records):
+    indexed = defaultdict(list)
+    for index, record in enumerate(records):
+        key = source_key(record.get("source"))
+        if key is not None:
+            indexed[key].append(index)
+    return indexed
+
+
+def resolve_refs(refs, at, indexed, errors, allowed=None):
+    parsed = list_of_objects(refs, at, errors)
+    if not parsed:
+        errors.append({"code": "SOURCE_REFS_REQUIRED", "at": at})
+    resolved = set()
+    for ref_index, reference in enumerate(parsed):
+        key = source_key(reference)
+        if key is None:
+            errors.append({"code": "SOURCE_COORDINATE_INVALID", "at": f"{at}[{ref_index}]"})
+            continue
+        matches = indexed.get(key, [])
+        if len(matches) != 1:
+            errors.append({"code": "EVIDENCE_REF_UNRESOLVED" if not matches else "EVIDENCE_REF_AMBIGUOUS",
+                           "at": f"{at}[{ref_index}]", "matches": len(matches)})
+            continue
+        if allowed is not None and key not in allowed:
+            errors.append({"code": "EVIDENCE_REF_NOT_LINKED_ANOMALY", "at": f"{at}[{ref_index}]"})
+            continue
+        resolved.add(key)
+    return resolved
+
+
 def dec(value, at, errors):
     try:
         number = Decimal(str(value))
@@ -40,10 +114,16 @@ def coordinates(record):
 def prepare_records(records, errors, warnings):
     prepared = []
     seen = set()
+    time_types = defaultdict(set)
     for index, record in enumerate(records):
         source = record.get("source", {})
-        if not source.get("file") or source.get("row") is None:
+        if source_key(source) is None:
             errors.append({"code": "SOURCE_COORDINATE_REQUIRED", "record_index": index})
+        time_index = record.get("time_index")
+        if isinstance(time_index, bool) or not isinstance(time_index, (int, float, str)):
+            errors.append({"code": "TIME_INDEX_INVALID", "record_index": index, "value": time_index})
+        group_key = (record.get("metric"), record.get("sample"), record.get("batch"), record.get("channel"), record.get("unit"))
+        time_types[group_key].add(type(time_index).__name__)
         unit = record.get("unit")
         if not unit:
             errors.append({"code": "UNIT_REQUIRED", "record_index": index})
@@ -64,7 +144,15 @@ def prepare_records(records, errors, warnings):
             enriched = dict(record)
             enriched["numeric_value"] = number
             prepared.append(enriched)
+    for key, types in time_types.items():
+        if len(types) > 1:
+            errors.append({"code": "MIXED_TIME_INDEX_TYPES", "metric": key[0], "sample": key[1], "batch": key[2],
+                           "channel": key[3], "unit": key[4], "types": sorted(types)})
     return prepared
+
+
+def time_sort_key(value):
+    return type(value).__name__, str(value)
 
 
 def trends(records):
@@ -79,7 +167,7 @@ def trends(records):
         for record in group:
             by_time[record.get("time_index")].append(record)
         time_summaries = []
-        for time_index, values in sorted(by_time.items(), key=lambda pair: pair[0]):
+        for time_index, values in sorted(by_time.items(), key=lambda pair: time_sort_key(pair[0])):
             median = statistics.median(record["numeric_value"] for record in values)
             time_summaries.append({"time_index": time_index, "median": str(median), "n": len(values),
                                    "sources": [record.get("source") for record in values]})
@@ -139,7 +227,7 @@ def anomaly_results(data, records, errors, warnings):
     return results
 
 
-def review_math(data, errors):
+def review_math(data, errors, indexed, anomaly_by_cause):
     currency = data.get("review_budget", {}).get("currency")
     total_minutes, total_cost = Decimal(0), Decimal(0)
     time_complete, cost_complete = bool(data.get("review_actions")), bool(data.get("review_actions"))
@@ -153,8 +241,9 @@ def review_math(data, errors):
                 errors.append({"code": "REVIEW_ACTION_INCOMPLETE", "action": action.get("id"), "missing": field})
         if action.get("linked_cause") not in causes:
             errors.append({"code": "REVIEW_ACTION_CAUSE_UNKNOWN", "action": action.get("id")})
-        if not action.get("source_refs"):
-            errors.append({"code": "SOURCE_MISSING", "action": action.get("id")})
+        linked_cause = action.get("linked_cause")
+        allowed = anomaly_by_cause.get(linked_cause) if linked_cause in causes else None
+        resolve_refs(action.get("source_refs"), f"review_actions[{action.get('id')}].source_refs", indexed, errors, allowed)
         minutes = nonnegative_dec(action.get("minutes"), f"action[{action.get('id')}].minutes", errors)
         if minutes is not None:
             total_minutes += minutes
@@ -164,7 +253,7 @@ def review_math(data, errors):
         if not action.get("cost_items"):
             cost_complete = False
             errors.append({"code": "REVIEW_COST_MISSING", "action": action.get("id"), "action_required": "supply a sourced price or retain an unknown subtotal, never zero"})
-        for item in action.get("cost_items", []):
+        for item in list_of_objects(action.get("cost_items", []), f"review_actions[{action.get('id')}].cost_items", errors):
             quantity = nonnegative_dec(item.get("quantity"), f"action[{action.get('id')}].cost.quantity", errors)
             price = nonnegative_dec(item.get("unit_price"), f"action[{action.get('id')}].cost.unit_price", errors)
             if item.get("currency") != currency:
@@ -197,26 +286,80 @@ def process(data):
     errors, warnings = [], []
     if data.get("schema") != SCHEMA:
         errors.append({"code": "SCHEMA_MISMATCH", "expected": SCHEMA})
+    if not valid_id(data.get("case_id")):
+        errors.append({"code": "CASE_ID_REQUIRED", "field": "case_id", "value": data.get("case_id")})
     if data.get("scenario") not in {"case_observed", "organizer_prospective", "synthetic_nonofficial"}:
         errors.append({"code": "SCENARIO_REQUIRED", "allowed": ["case_observed", "organizer_prospective", "synthetic_nonofficial"]})
-    records = prepare_records(data.get("records", []), errors, warnings)
-    anomalies = anomaly_results(data, records, errors, warnings)
+    raw_records = list_of_objects(data.get("records", []), "records", errors)
+    records = prepare_records(raw_records, errors, warnings)
+    indexed = source_index(raw_records)
+    raw_rules = list_of_objects(data.get("anomaly_rules", []), "anomaly_rules", errors)
+    validate_ids(raw_rules, "anomaly_rules", errors)
+    anomaly_data = dict(data)
+    anomaly_data["anomaly_rules"] = raw_rules
+    anomalies = anomaly_results(anomaly_data, records, errors, warnings)
+    anomaly_keys = {source_key(anomaly["coordinate"].get("source")) for result in anomalies for anomaly in result["anomalies"]}
+    anomaly_keys.discard(None)
+    raw_causes = list_of_objects(data.get("causes", []), "causes", errors)
+    validate_ids(raw_causes, "causes", errors)
     causes = []
-    for cause in data.get("causes", []):
+    anomaly_by_cause = {}
+    for cause_index, cause in enumerate(raw_causes):
+        cause_id = cause.get("id")
         evidence_class = cause.get("evidence_class")
         if evidence_class not in EVIDENCE_RANK:
-            errors.append({"code": "CAUSE_EVIDENCE_CLASS_INVALID", "cause": cause.get("id")})
-        if not cause.get("support_refs"):
-            errors.append({"code": "CAUSE_SUPPORT_REQUIRED", "cause": cause.get("id")})
+            errors.append({"code": "CAUSE_EVIDENCE_CLASS_INVALID", "cause": cause_id})
+        resolved = resolve_refs(cause.get("support_refs"), f"causes[{cause_index}].support_refs", indexed, errors, anomaly_keys)
+        anomaly_by_cause[cause_id] = resolved
+        counterevidence = cause.get("counterevidence", [])
+        if not isinstance(counterevidence, list):
+            errors.append({"code": "OBJECT_LIST_REQUIRED", "at": f"causes[{cause_index}].counterevidence"})
+            counterevidence = []
+        for counter_index, counter in enumerate(counterevidence):
+            if isinstance(counter, str):
+                continue
+            at = f"causes[{cause_index}].counterevidence[{counter_index}]"
+            if not isinstance(counter, dict):
+                errors.append({"code": "COUNTEREVIDENCE_INVALID", "at": at})
+                continue
+            if counter.get("linked_cause") != cause_id:
+                errors.append({"code": "COUNTEREVIDENCE_CAUSE_MISMATCH", "at": at, "expected": cause_id,
+                               "actual": counter.get("linked_cause")})
+            resolve_refs(counter.get("source_refs"), f"{at}.source_refs", indexed, errors)
         causes.append({**cause, "causality_status": "candidate_only_unless_actually_controlled_evidence_is_supplied"})
     causes.sort(key=lambda cause: (EVIDENCE_RANK.get(cause.get("evidence_class"), 99), str(cause.get("id"))))
-    reviews = review_math(data, errors)
+    review_actions = list_of_objects(data.get("review_actions", []), "review_actions", errors)
+    validate_ids(review_actions, "review_actions", errors)
+    review_data = dict(data)
+    review_data["review_actions"] = review_actions
+    if not isinstance(review_data.get("review_budget"), dict):
+        errors.append({"code": "REVIEW_BUDGET_OBJECT_REQUIRED"})
+        review_data["review_budget"] = {}
+    reviews = review_math(review_data, errors, indexed, anomaly_by_cause)
+    raw_next = list_of_objects(data.get("next_experiments", []), "next_experiments", errors)
+    next_experiments = []
+    cause_ids = {cause.get("id") for cause in raw_causes}
+    for index, experiment in enumerate(raw_next):
+        at = f"next_experiments[{index}]"
+        linked_cause = experiment.get("linked_cause")
+        if linked_cause not in cause_ids:
+            errors.append({"code": "NEXT_EXPERIMENT_CAUSE_UNKNOWN", "at": at, "linked_cause": linked_cause})
+        if not valid_id(experiment.get("changed_variable")):
+            errors.append({"code": "NEXT_EXPERIMENT_VARIABLE_REQUIRED", "at": f"{at}.changed_variable"})
+        controls = experiment.get("controlled_variables")
+        if not isinstance(controls, list) or not controls or not all(valid_id(control) for control in controls):
+            errors.append({"code": "NEXT_EXPERIMENT_CONTROLS_REQUIRED", "at": f"{at}.controlled_variables"})
+        if not valid_id(experiment.get("judgment")):
+            errors.append({"code": "NEXT_EXPERIMENT_JUDGMENT_REQUIRED", "at": f"{at}.judgment"})
+        allowed = anomaly_by_cause.get(linked_cause) if linked_cause in cause_ids else None
+        resolve_refs(experiment.get("source_refs"), f"{at}.source_refs", indexed, errors, allowed)
+        next_experiments.append({**experiment, "execution_status": "proposed_not_executed"})
     return {"auxiliary_schema": SCHEMA, "case_id": data.get("case_id"), "status": "failed" if errors else "pass",
             "five_part_analysis": {
                 "trends": trends(records), "anomalies": anomalies,
                 "possible_causes": causes,
                 "recheck_steps": reviews["actions"],
-                "next_experiments": data.get("next_experiments", [])},
+                "next_experiments": next_experiments},
             "recheck_resource_arithmetic": {key: value for key, value in reviews.items() if key != "actions"},
             "errors": errors, "uncertainties": warnings,
             "unexplained": data.get("unexplained", []),

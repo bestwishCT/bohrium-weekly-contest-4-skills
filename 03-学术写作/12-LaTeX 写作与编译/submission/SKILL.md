@@ -26,7 +26,7 @@ description: "识别实际LaTeX主工程与模板依赖，最小修复公式、�
 - 先完整读取 `/input/case.json` 与 `/input/task.md`，再读取 case 指向的全部实际材料；执行前也读取 `environment/resources.yaml`。以原始 `case_id`、章节范围、语言、格式和 `output_contract` 为唯一契约，Unknown 不猜测，未要求的附件不制造。
 - 平台把本技能安装到 `/skills/weekly-skill`。以技能根目录为基准使用 `scripts/audit.py` 和 `references/record-template.json`；例如 `python3 /skills/weekly-skill/scripts/audit.py /app/work/audit_input.json`。模板只是结构示意，不是答案。
 - `/app/work` 保存只读输入快照清单、抽取文本、稳定ID、分块状态、审计输入/输出与中间稿；`/app/output` 只保存契约要求的完整可编辑成品、指定预览和 `result.json`。制作目录是 `/app/submission`，不要污染输入。
-- `result.json` 必须原样保留 `case_id` 和实际 `output_contract` 的全部原始字段，把成品、来源、状态、不确定性、变更、缺口落到契约指定字段；不得把示意字段强加给 case。各状态枚举以契约为准。
+- `result.json` 必须原样保留 `case_id`、原 `output_contract` 对象以及合同要求的全部顶层字段，把成品、来源、状态、不确定性、变更、缺口落到契约指定字段；不得把示意字段强加给 case。各状态枚举以契约为准。合同或目录不符时交付诚实 `partial` 并非零退出，不得改写合同伪装通过。
 - 材料编目至少记录材料ID、真实路径、类型、版本线索、可读范围、缺失及定位方式；证据映射记录成品锚点、论断/对象、来源ID、精确位置、原文或数值、支持范围和处理动作。冲突双列，不静默择一。
 
 ## 增量执行、状态与异常
@@ -34,6 +34,9 @@ description: "识别实际LaTeX主工程与模板依赖，最小修复公式、�
 - 状态区分材料缺失、科学/语义无法判断、工具或权限失败、部分完成；先保存诚实的部分成品和真实日志，能修JSON就修JSON，不删除已生成的真实产物。未执行的操作写未执行，不写成成功。
 - 只有 case 明确要求且工具实际存在时才制作 Office/LaTeX 二进制或其真实 PDF/PNG 预览；保留可编辑源，逐件打开核查。纯文本/Markdown任务不主动增加预览。缺编译器、字体或渲染器时明确标记 blocked，不伪造二进制。
 - 审计在 `/app/work` 生成独立审计输入，避免把测试数据混入正式输出；失败项回到具体源位置修复并重跑。禁止捏造实验、文献、DOI、人员、工具版本、分数、效率、白板或平台轨迹。
+- `audit.py` 以审计 JSON 所在目录为唯一材料根目录，从真实 `main` 递归解析 `\input`/`\include`；子文件、bib 和图片的符号链接或 `..` 均不得越界。它逐文件检查环境闭合，汇总跨文件 label/ref/cite，逐项保留相对文件与行号，并对循环 include、缺文件报错。跨文件合法引用不是错误。旧调用 `python3 scripts/audit.py INPUT.json` 保持不变。
+- 静态审计输出的 `compilation.status=not_executed`、`verification=unverified` 仅表示未真实编译。仅在输入声明 `build.status=success` 时，脚本才会对允许列表中的 TeX 编译器实际重跑所声明命令并记录真实命令、退出码和输出；编译器不存在或命令不可执行时判失败，绝不接受自报 success、伪造 PDF/日志。该重跑仍不代表官方 TeX 环境已验证。其他状态只审计记录，不自动编译。
+- 如需审计正式交付适配，在同一审计 JSON 增加真实 `case_id`、原 `output_contract`、`result_json` 和 `output_dir`（正式运行分别为 `/app/output/result.json` 与 `/app/output`）。脚本核对 result 的 case_id、原合同副本及合同全部顶层字段；不符合时输出 `partial` 并退出 1。通用脚本无法判断任意合同字段的科学语义，仍须逐字段人工核对。
 
 ## 最小非官方示意与验收
 以下仅为虚构“示意”，不是官方案例：将一段含“12 samples, p=0.04, Fig. 1 [A]”的短材料写入 `/app/work/audit_input.json`，执行上述 `audit.py`。应得到机器可读检查项；示例文本不进入 `/app/output`。实际案例必须替换为真实材料并产出契约指定的完整结果。

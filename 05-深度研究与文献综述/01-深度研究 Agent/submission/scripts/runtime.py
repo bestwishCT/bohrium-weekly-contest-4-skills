@@ -174,17 +174,48 @@ def check_common(data, base):
             errors.append("evidence %s quote is absent from its source" % eid)
         locator = row["locator"]
         if isinstance(locator, dict):
-            if isinstance(locator.get("page"), int):
-                pages = text.split("\f")
-                if not 1 <= locator["page"] <= len(pages) or quote not in pages[locator["page"] - 1]:
-                    errors.append("evidence %s quote is not on declared page" % eid)
+            if "page" in locator:
+                page = locator["page"]
+                if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+                    errors.append("evidence %s page must be a positive integer" % eid)
+                else:
+                    pages = text.split("\f")
+                    if page > len(pages) or quote not in pages[page - 1]:
+                        errors.append("evidence %s quote is not on declared page" % eid)
             if isinstance(locator.get("paragraph"), int):
                 paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
                 if not 1 <= locator["paragraph"] <= len(paragraphs) or quote not in paragraphs[locator["paragraph"] - 1]:
                     errors.append("evidence %s quote is not in declared paragraph" % eid)
         tid = row.get("tool_run_id")
-        if tid and (tid not in tools or tools[tid].get("status") != "ok"):
+        tool = tools.get(tid)
+        if not isinstance(tid, str) or not tid or tool is None or tool.get("status") != "ok":
             errors.append("evidence %s must come from a successful tool run" % eid)
+            continue
+        try:
+            artifact_path = Path(tool["artifact"])
+            artifact = load_json(artifact_path if artifact_path.is_absolute() else base / artifact_path)
+        except (InputError, KeyError) as exc:
+            errors.append("evidence %s tool artifact cannot be checked: %s" % (eid, exc))
+            continue
+        if not isinstance(artifact, dict):
+            errors.append("evidence %s tool artifact must be an object" % eid)
+            continue
+        record_ids = artifact.get("record_ids", [])
+        source_ids = artifact.get("source_ids", [])
+        record_ids = record_ids if isinstance(record_ids, list) else []
+        source_ids = source_ids if isinstance(source_ids, list) else []
+        if artifact.get("record_id") is not None:
+            record_ids.append(artifact["record_id"])
+        if artifact.get("source_id") is not None:
+            source_ids.append(artifact["source_id"])
+        record_id = row.get("record_id")
+        if record_id is not None:
+            if record_id not in record_ids:
+                errors.append("evidence %s record_id is absent from its tool artifact" % eid)
+            if artifact.get("source_id") is not None and row["source_id"] != artifact["source_id"]:
+                errors.append("evidence %s source_id differs from its tool artifact" % eid)
+        elif row["source_id"] not in record_ids + source_ids:
+            errors.append("evidence %s source_id is absent from its tool artifact" % eid)
     return sources, tools, evidence_by_id, errors
 
 
@@ -198,7 +229,7 @@ def materialize_tools(data, work):
 
 
 def outcome(evidence, tools, conflicts):
-    failed = [t for t in tools.values() if t.get("status") in TOOL_BAD]
+    failed = [t for t in tools.values() if t.get("status") in TOOL_BAD or t.get("status") == "not_executed"]
     if not evidence:
         return "blocked", 4, failed
     if failed:
@@ -315,6 +346,8 @@ def build(args, domain_validate):
     derived, domain_audit, domain_errors = domain_validate(data, sources, tools, evidence, base)
     conflicts = data.get("conflicts", [])
     state, exit_code, failed = outcome(evidence, tools, conflicts)
+    if domain_audit.get("partial") and state not in {"blocked", "partial"}:
+        state, exit_code = "partial", 5
     errors = common_errors + domain_errors
     if errors:
         state, exit_code = "invalid", 2
@@ -349,6 +382,8 @@ def build(args, domain_validate):
     contract_errors = []
     if contract is not None:
         validate_schema(result, contract, "$result", contract_errors, contract_warnings)
+    if contract_warnings:
+        contract_errors.extend(contract_warnings)
     if contract_errors:
         errors.extend(contract_errors)
         state, exit_code = "invalid", 2
@@ -358,7 +393,7 @@ def build(args, domain_validate):
              "checks": [{"id": "actual_case_and_task_frozen", "passed": True},
                         {"id": "quotes_and_source_permissions", "passed": not common_errors},
                         {"id": "domain_integrity", "passed": not domain_errors},
-                        {"id": "actual_output_contract", "passed": not contract_errors}],
+                        {"id": "actual_output_contract", "passed": not contract_errors and not contract_warnings}],
              "validation_errors": errors, "contract_warnings": contract_warnings,
              "boundary": "Only the supplied, authorized and successfully retrieved materials support this result; no global coverage or experiment is claimed."}
     write_json(work / "integrity_audit.json", audit)

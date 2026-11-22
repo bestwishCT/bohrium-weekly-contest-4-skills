@@ -16,14 +16,15 @@ description: "对完整学术论文开展研究问题、章节结构、论证链
 3. 拆出论点—数据/实验/文献/推理映射，区分断链、跳跃、循环、证据不足和文风问题；不从关键词相似度直接推出逻辑错误。
 4. 核查段间过渡及跨章同义重复。相似候选必须语义复核是否各负其责，给移动目标、合并对象、拆分点和过渡内容，不主动重写全篇。
 5. 将摘要/结论的范围、比较、因果和普遍性与实际样本/条件逼近，指出需收窄的原句、建议边界和证据；限制不机械套话。
-6. 每条诊断含定位、六维类别、原文事实依据、影响、动作、受影响章节、复核方法、优先级和决策点。六维分别写checked状态；无问题就如实无问题。
+6. 每条诊断含定位、六维类别、原文事实依据、影响、动作、受影响章节、复核方法、优先级和决策点。内部审计动作字段对应为 `anchor`、`excerpt`、`rationale`、`action`、`verify`、`impact`、`affected_sections`、`priority`、`decision_point`；文本字段须为非空字符串，`affected_sections` 须为至少含一个非空字符串的数组。优先级枚举仅在原case明确规定时采用，不自行增设公开合同约束。六维分别写checked状态；无问题就如实无问题。
 7. 最终交付编辑计划而非未经请求的新稿；默认JSON/Markdown即可，PDF和Office仅在更新case实际要求时生成。
 
 ## 真实运行入口与资源
 - 先完整读取 `/input/case.json` 与 `/input/task.md`，再读取 case 指向的全部实际材料；执行前也读取 `environment/resources.yaml`。以原始 `case_id`、章节范围、语言、格式和 `output_contract` 为唯一契约，Unknown 不猜测，未要求的附件不制造。
-- 平台把本技能安装到 `/skills/weekly-skill`。以技能根目录为基准使用 `scripts/audit.py` 和 `references/record-template.json`；例如 `python3 /skills/weekly-skill/scripts/audit.py /app/work/audit_input.json`。模板只是结构示意，不是答案。
+- 平台把本技能安装到 `/skills/weekly-skill`。以技能根目录为基准使用 `scripts/audit.py` 和 `references/record-template.json`；例如 `python3 /skills/weekly-skill/scripts/audit.py /app/work/audit_input.json`。模板只是内部审计结构示意，不是答案或公开 `output_contract`。
+- 读取实际case后先运行 `python3 /skills/weekly-skill/scripts/initialize_case.py`（默认读取 `/input/case.json`、`/input/task.md`，写入 `/app/work` 和 `/app/output`）。驱动只编目显式 `materials` 路径及可选 `--material` 路径，保留真实 `case_id` 和原始 `output_contract` 字段并先落 `partial`；未支持的case材料布局须由Agent实读后显式传入，不得猜测。驱动不生成六维诊断，返回partial不代表论文分析完成。
 - `/app/work` 保存只读输入快照清单、抽取文本、稳定ID、分块状态、审计输入/输出与中间稿；`/app/output` 只保存契约要求的完整可编辑成品、指定预览和 `result.json`。制作目录是 `/app/submission`，不要污染输入。
-- `result.json` 必须原样保留 `case_id` 和实际 `output_contract` 的全部原始字段，把成品、来源、状态、不确定性、变更、缺口落到契约指定字段；不得把示意字段强加给 case。各状态枚举以契约为准。
+- `result.json` 必须原样保留 `case_id` 和实际 `output_contract` 的全部原始字段，把成品、来源、状态、不确定性、变更、缺口落到契约指定字段；不得把示意字段强加给 case。内部审计字段留在 `/app/work/audit_input.json`，须按实际字段语义逐项映射到公开契约，不能把 `dimensions`、`actions` 或四个新增诊断字段自动复制为公开字段。各状态枚举以契约为准；初始化驱动只填写契约允许的部分状态与缺口，其余未知值留空，等待Agent完成。
 - 材料编目至少记录材料ID、真实路径、类型、版本线索、可读范围、缺失及定位方式；证据映射记录成品锚点、论断/对象、来源ID、精确位置、原文或数值、支持范围和处理动作。冲突双列，不静默择一。
 
 ## 增量执行、状态与异常

@@ -28,7 +28,7 @@ description: Organize existing research into an audience- and time-specific nati
 
 ## 将决策落实为可编辑 deck
 
-先逐页读取实际 `master/layout`、placeholder 与主题字体；`page.layout` 必须匹配当前真实 layout。若采用合成回归的 `title_font_pt: 28`，必须已确认它符合实际模板的可读层级，正式 case 另有指定时从 case，不能缩小封面或内容标题来掩盖信息取舍失败。
+先逐页读取实际 `master/layout`、placeholder 与主题字体；`page.layout` 必须匹配当前真实 layout。若采用合成回归的 `title_font_pt: 28`，必须已确认它符合实际模板的可读层级，正式 case 另有指定时从 case，不能缩小封面或内容标题来掩盖信息取舍失败。标题槽高度不足 100pt 且解析字号超过 36pt 时，只把该槽字号限制为 36pt 并记录原字号，保持模板几何与更大的标题样式；仍须实际渲染复核。
 
 `compose_talk.py` 先校验青众字段、候选去留、唯一 claim、必需 opening/evidence/synthesis、页数总时间、问答与页面互链，再生成。缺一个必需环节即失败，不输出“看似完成”的空逻辑 deck。
 

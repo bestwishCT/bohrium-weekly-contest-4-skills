@@ -139,6 +139,61 @@ def bind_contract(case, payload, aliases=None):
     return result
 
 
+def contract_errors(contract, value, aliases=None, path="result", require_fields=True):
+    """Report declared fields/types without treating placeholders as evidence."""
+    aliases = aliases or {}
+    if isinstance(contract, dict) and ("properties" in contract or contract.get("type") in {"object", "array", "string", "number", "integer", "boolean"}):
+        kind = contract.get("type", "object" if "properties" in contract else None)
+        expected = {"object": dict, "array": list, "string": str, "boolean": bool}.get(kind)
+        if kind in {"number", "integer"}:
+            valid = isinstance(value, (int, float) if kind == "number" else int) and not isinstance(value, bool)
+        else:
+            valid = isinstance(value, expected)
+        if not valid:
+            return [path + " has incorrect type for " + str(kind)]
+        if kind == "object":
+            errors = []
+            for name, spec in contract.get("properties", {}).items():
+                child = pick(value, name, aliases)
+                child_path = path + "." + name
+                if child is MISSING:
+                    if require_fields:
+                        errors.append(child_path + " is missing")
+                else:
+                    errors.extend(contract_errors(spec, child, aliases, child_path, require_fields))
+            return errors
+        if kind == "array":
+            if not contract.get("items"):
+                return []
+            return [error for index, item in enumerate(value)
+                    for error in contract_errors(contract["items"], item, aliases, "%s[%d]" % (path, index))]
+        return []
+    if isinstance(contract, dict):
+        if not isinstance(value, dict):
+            return [path + " has incorrect type for object"]
+        errors = []
+        for name, spec in contract.items():
+            child = pick(value, name, aliases)
+            child_path = path + "." + name
+            if child is MISSING:
+                if require_fields:
+                    errors.append(child_path + " is missing")
+            else:
+                errors.extend(contract_errors(spec, child, aliases, child_path, require_fields))
+        return errors
+    if isinstance(contract, list):
+        if not isinstance(value, list):
+            return [path + " has incorrect type for array"]
+        if contract:
+            return [error for index, item in enumerate(value)
+                    for error in contract_errors(contract[0], item, aliases, "%s[%d]" % (path, index))]
+        return []
+    expected = type(contract)
+    if value is None or not isinstance(value, expected) or (expected is not bool and isinstance(value, bool)):
+        return [path + " has incorrect type for " + expected.__name__]
+    return []
+
+
 def paragraphs(value):
     """Accept common paragraph containers without inferring missing identifiers."""
     if isinstance(value, dict):
@@ -233,7 +288,22 @@ class Run:
         base.update(payload)
         if self.case_id is None:
             base.pop("case_id", None)
+        aliases = {norm(key): value for key, value in (aliases or {}).items()}
         result = bind_contract(self.case, base, aliases)
+        errors = []
+        if self.case.get("output_contract"):
+            errors = contract_errors(self.case["output_contract"], base, aliases, require_fields=False)
+            errors += [error for error in contract_errors(self.case["output_contract"], result, aliases) if error not in errors]
+        if errors:
+            code = 2
+            base["status"] = "partial"
+            self.uncertainty.extend(error for error in errors if error not in self.uncertainty)
+            if isinstance(result.get("status"), str):
+                result["status"] = "partial"
+            if isinstance(result.get("failures"), list):
+                result["failures"].extend(error for error in errors if error not in result["failures"])
+            if isinstance(result.get("uncertainty"), list):
+                result["uncertainty"] = self.uncertainty
         write_json(self.output / "result.json", result)
         self.trace(trace_extra)
         print(json.dumps({"status": base["status"], "exit_code": code,

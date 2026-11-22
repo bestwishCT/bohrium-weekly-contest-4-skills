@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render final PPTX with LibreOffice, rasterize all PDF pages, and audit geometry."""
 import argparse
+import hashlib
 import json
 import math
 import platform
@@ -11,34 +12,114 @@ import sys
 from pathlib import Path
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--pptx", required=True)
-    ap.add_argument("--outdir", required=True)
-    ap.add_argument("--work", required=True)
-    ap.add_argument("--soffice")
-    args = ap.parse_args()
+def dump(path, value):
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sync_contract(deck, out, report, expected_hash):
+    """Update only existing contract fields; preserve case_id and unrelated deep data."""
+    result_path = out / "result.json"
+    if not result_path.is_file():
+        return
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    actual_hash = report.get("pptx_sha256")
+    bound = bool(expected_hash) and expected_hash == actual_hash and report.get("pptx_sha256_after") == actual_hash
+    passed = report.get("status") == "automated-render-passed-visual-required" and bound
+    values = {"status": "partial", "render": report, "validation": report}
+    limitations = report.get("limitations", [])
+    if "uncertainty" in result and isinstance(result["uncertainty"], list):
+        old = [item for item in result["uncertainty"] if item != "final PPTX actual render and per-page visual/font/crop inspection pending"]
+        values["uncertainty"] = old + [item for item in limitations if item not in old]
+    if "artifacts" in result and isinstance(result["artifacts"], list):
+        retained = [item for item in result["artifacts"] if not (isinstance(item, str) and Path(item).parent == out
+                    and Path(item).suffix.lower() in (".pdf", ".png"))]
+        fresh = []
+        if report.get("pdf") and Path(report["pdf"]).is_file():
+            fresh.append(report["pdf"])
+        fresh.extend(row["png"] for row in report.get("pages", []) if Path(row["png"]).is_file())
+        if report.get("contact_sheet") and Path(report["contact_sheet"]).is_file():
+            fresh.append(report["contact_sheet"])
+        values["artifacts"] = retained + [item for item in fresh if item not in retained]
+    for key, value in values.items():
+        if key in result:
+            if result[key] is not None and not isinstance(value, type(result[key])):
+                raise TypeError(f"contract field {key} changed type")
+            result[key] = value
+    dump(result_path, result)
+    record_path = out / "adaptation_record.json"
+    if record_path.is_file():
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["render"] = report
+        dump(record_path, record)
+
+
+def remove_derived_previews(out, deck):
+    for path in [out / (deck.stem + ".pdf"), out / "contact-sheet.png", *out.glob("page-*.png")]:
+        if path.is_file():
+            path.unlink()
+
+
+def run(args):
     deck, out, work = Path(args.pptx).resolve(), Path(args.outdir).resolve(), Path(args.work).resolve()
     out.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
-    report = {"status": "not-passed", "pptx": str(deck), "visual_review": "required", "issues": []}
+    if not deck.is_file():
+        raise SystemExit("render-not-passed: final PPTX does not exist")
+    before_hash = sha(deck)
+    report = {"status": "not-passed", "pptx": str(deck), "pptx_sha256": before_hash,
+              "visual_review": "required", "issues": []}
+    record_path = out / "adaptation_record.json"
+    expected_hash = None
+    if record_path.is_file():
+        expected_hash = json.loads(record_path.read_text(encoding="utf-8")).get("final_sha256")
+    else:
+        report["issues"].append("adaptation_record.json is missing; build-to-render hash binding unavailable")
+    if expected_hash != before_hash:
+        report["issues"].append("current PPTX hash differs from adaptation record; existing previews are stale")
+        report["stale_preview"] = True
+        report["limitations"] = ["No render was attached to a different PPTX build; regenerate adaptation before rendering."]
+        dump(out / "render_report.json", report)
+        sync_contract(deck, out, report, expected_hash)
+        print("render-not-passed: stale final PPTX", file=sys.stderr)
+        return 2
+    remove_derived_previews(out, deck)
     try:
         import fitz
         from pptx import Presentation
-        from PIL import Image, ImageOps, ImageDraw
+        from PIL import Image, ImageDraw
     except ImportError as exc:
         report["issues"].append(f"missing optional render dependency: {exc.name}")
-        (out / "render_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        report["pptx_sha256_after"] = sha(deck)
+        dump(out / "render_report.json", report)
+        sync_contract(deck, out, report, expected_hash)
         print("render-not-passed: install PyMuPDF, Pillow and python-pptx", file=sys.stderr)
         return 3
     office = args.soffice or shutil.which("soffice") or shutil.which("libreoffice")
+    if office and not Path(office).is_file() and not shutil.which(office):
+        office = None
     if not office:
         report.update({"renderer": None, "limitations": ["LibreOffice/soffice unavailable; no PDF or page PNG was produced"],
-                       "python": platform.python_version(), "PyMuPDF": fitz.VersionBind})
-        (out / "render_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+                       "python": platform.python_version(), "PyMuPDF": fitz.VersionBind,
+                       "pptx_sha256_after": sha(deck)})
+        dump(out / "render_report.json", report)
+        sync_contract(deck, out, report, expected_hash)
         print("render-not-passed: LibreOffice/soffice unavailable", file=sys.stderr)
         return 3
-    version = subprocess.run([office, "--version"], text=True, capture_output=True).stdout.strip()
+    try:
+        version_proc = subprocess.run([office, "--version"], text=True, capture_output=True, timeout=20)
+        version_proc.check_returncode()
+        version = version_proc.stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        report.update({"renderer": None, "limitations": [f"renderer probe failed: {exc}; no PDF or page PNG was produced"],
+                       "pptx_sha256_after": sha(deck)})
+        dump(out / "render_report.json", report)
+        sync_contract(deck, out, report, expected_hash)
+        print("render-not-passed: renderer probe failed", file=sys.stderr)
+        return 3
     report.update({"renderer": version, "PyMuPDF": fitz.VersionBind, "python": platform.python_version()})
     profile = (work / "lo-profile").as_uri()
     cmd = [office, "--headless", f"-env:UserInstallation={profile}", "--convert-to", "pdf", "--outdir", str(out), str(deck)]
@@ -50,7 +131,10 @@ def main():
     pdf = out / (deck.stem + ".pdf")
     if proc.returncode or not pdf.is_file():
         report["issues"].append("final PPTX to PDF conversion failed")
-        (out / "render_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        report["pptx_sha256_after"] = sha(deck)
+        report["limitations"] = ["final PPTX to PDF conversion failed; no successful render claimed"]
+        dump(out / "render_report.json", report)
+        sync_contract(deck, out, report, expected_hash)
         print("render-not-passed: PDF missing", file=sys.stderr)
         return 2
     prs, doc = Presentation(str(deck)), fitz.open(str(pdf))
@@ -96,10 +180,42 @@ def main():
     contact_path = out / "contact-sheet.png"
     contact.save(contact_path)
     report["contact_sheet"] = str(contact_path)
+    report["pptx_sha256_after"] = sha(deck)
+    if report["pptx_sha256_after"] != before_hash:
+        report["stale_preview"] = True
+        report["issues"].append("PPTX hash changed during rendering; previews are stale")
     report["status"] = "automated-render-passed-visual-required" if not report["issues"] else "render-check-failed"
-    (out / "render_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    report["limitations"] = ["Automated rendering does not certify scientific content, visual quality, PowerPoint/WPS compatibility, or renderer behavior beyond the recorded command."]
+    dump(out / "render_report.json", report)
+    sync_contract(deck, out, report, expected_hash)
     print(json.dumps({"status": report["status"], "pages": len(doc), "issues": report["issues"]}, ensure_ascii=False))
     return 0 if not report["issues"] else 2
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--pptx", required=True)
+    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--work", required=True)
+    ap.add_argument("--soffice")
+    args = ap.parse_args()
+    try:
+        return run(args)
+    except Exception as exc:
+        deck, out = Path(args.pptx).resolve(), Path(args.outdir).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        Path(args.work).resolve().mkdir(parents=True, exist_ok=True)
+        before_hash = sha(deck) if deck.is_file() else None
+        record_path = out / "adaptation_record.json"
+        expected_hash = json.loads(record_path.read_text(encoding="utf-8")).get("final_sha256") if record_path.is_file() else None
+        report = {"status": "not-passed", "pptx": str(deck), "pptx_sha256": before_hash,
+                  "pptx_sha256_after": before_hash, "visual_review": "required",
+                  "issues": [f"{type(exc).__name__}: {exc}"],
+                  "limitations": ["Renderer or render checking failed; no successful render or visual pass claimed."]}
+        dump(out / "render_report.json", report)
+        sync_contract(deck, out, report, expected_hash)
+        print(f"render-not-passed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

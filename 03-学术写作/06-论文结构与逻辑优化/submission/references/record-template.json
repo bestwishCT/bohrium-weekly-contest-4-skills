@@ -12,7 +12,19 @@
       {
         "dimension": "研究问题|章节结构|论证链|段落关系|重复内容|结论边界",
         "status": "checked_no_issue|found|unknown",
-        "actions": []
+        "actions": [
+          {
+            "anchor": "非空段落ID",
+            "excerpt": "该段落中的非空原文子串",
+            "action": "非空字符串",
+            "rationale": "非空字符串",
+            "verify": "非空字符串",
+            "impact": "非空字符串",
+            "priority": "非空字符串；枚举仅在实际case明确规定时使用",
+            "affected_sections": ["非空章节ID或标题；至少一项"],
+            "decision_point": "非空字符串"
+          }
+        ]
       }
     ],
     "similarity_candidates": [],

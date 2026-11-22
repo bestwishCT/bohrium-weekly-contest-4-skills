@@ -5,7 +5,7 @@
     "main": "main.tex",
     "bib": "refs.bib",
     "build": {
-      "status": "success|failed|blocked|not_run",
+      "status": "success|failed|blocked|not_run|not_executed|unverified",
       "reason": "",
       "command": "",
       "exit_code": null,

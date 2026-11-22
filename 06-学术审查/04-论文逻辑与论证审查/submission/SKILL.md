@@ -34,11 +34,21 @@ description: 抽取真实科研稿件的核心主张、说话者、限定条件�
 `major` 于核心主张—证据链断裂或关键承诺无交付且改变解释；`moderate` 于重要次级推理或跨章口径；`minor` 于不改变结论的局部衔接；`advisory` 只作可选增强；`critical` 仅可直接伤害且证据充分。证据不足不冒充确定错误，每项均说明能否局部改句、是否需新增分析及是否影响复现。
 
 ## 确定性图谱校验
-作者环境实测 `/usr/bin/python3` 为 Python 3.9.6；脚本只用标准库 `argparse/json/pathlib/sys`，无需安装或联网。将人工全文解读后的 `/app/work/argument_review.json` 运行：
+脚本只用 Python 标准库，无需安装或联网。将人工全文解读后的 `/app/work/argument_review.json` 运行（位置参数与 `--candidate` 等价）：
 ```sh
-python3 /skills/weekly-skill/scripts/check_arguments.py /app/work/argument_review.json > /app/work/argument_validation.json
+python3 /skills/weekly-skill/scripts/check_arguments.py --candidate /app/work/argument_review.json > /app/work/argument_validation.json
 ```
-脚本核原句唯一性、说话者/证据引用、承诺节点和矩阵范围；只在人工结构化标记作者因果主张、证据仅具相关能力且无额外识别依据时生成推理复核候选，只将人工标记同口径直接矛盾生成一致性候选。`reported/hypothesis/intentional_contrast` 明确排除，输出不是自动学术判定。退出 0 结构有效，2 为坏输入或证据错误。
+ledger 必须含 `argument_graph.nodes/edges/claim_checks`：节点/边 ID 全局唯一，claim/evidence 节点以 `ref_id` 回接原清单，premise 节点须有原句与位置；合法边包括 `supports/premise_for/refutes/alternative_to/scoped_by`。每个作者非假设主张至少一条入向 `premise_for`，每个 claim 节点写实际 `scope`；作者因果主张须在 `claim_checks` 记录反例和替代解释的状态、关联节点及理由，缺失检查不会被当作已经排除。可用证据仍须原句定位及 `design_capacity`。
+
+脚本核原句唯一性、说话者/证据引用、承诺节点和矩阵范围；作者因果主张在**没有可用证据**或证据仅具相关能力且无额外识别依据时都生成待证复核候选，零证据不会因 `evidence_ids` 为空而漏报。只将人工标记同口径直接矛盾生成一致性候选，`reported/hypothesis/intentional_contrast` 明确排除，输出不是自动学术判定。finding 可归属四主轴或六类 related facet，但必须由对应 `issues_found` 行恰好关联一次。截断文本的跨章轴不得为 `passed`。退出 0 结构有效，2 为坏输入、图谱或证据错误。
+
+真实 case 不使用自制 `fixture_id` 代替官方输入。候选文件是 `{ "ledger": {...}, "result": {...} }`，其中 `result` 只填写实际 `output_contract` 字段；ledger 的 `manuscript.text` 由驱动从 case 声明的材料读入，不能靠候选自抄正文通过定位核验。运行：
+```sh
+python3 /skills/weekly-skill/scripts/check_arguments.py \
+  --case-dir /input --candidate /app/work/case_candidate.json \
+  --output /app/output/result.json --work-dir /app/work
+```
+驱动读取 `/input/case.json`、`task.md` 及 `materials`（也兼容 `material_paths/files`）声明的真实 UTF-8 文本材料，强制采用 case 的 `case_id`，在图谱及合同校验前先落部分 `result.json`。随后按实际 JSON Schema 递归核对 `required/type/enum/items/properties`，成功才写完整校验记录。合同错误保留部分结果、输出 `validator_status=partial` 并退出 3；输入或图谱错误退出 2。PDF/扫描件须先用当案真实可用工具形成忠实文本及可读范围，不得把二进制乱码、猜测文本或不存在材料当正文。
 
 ## 输出与失败恢复
 尽早形成真实契约的部分 `/app/output/result.json`，含 `case_id` 和**全部原字段**，保留输入版本、实际主结果、来源、状态、不确定性和变更记录；图谱和跨章对照与 JSON 一致。只有任务实际要求并生成可编辑论证图/Office/slide 时才输出真实 PDF/PNG 预览，普通清单不机械配图。

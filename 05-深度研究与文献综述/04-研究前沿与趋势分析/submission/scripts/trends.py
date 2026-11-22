@@ -81,16 +81,75 @@ def validate(data, sources, tools, evidence, base):
     growth = None
     growth_limit = "At least three non-empty years and six independent documents are required for a descriptive period delta."
     observed_years = sorted(r["year"] for r in rows if r["document_count"])
-    if len(observed_years) >= 3 and len(independent) >= 6:
+    baseline_spec = scope.get("baseline_window")
+    comparison_spec = scope.get("comparison_window")
+    if (baseline_spec is None) != (comparison_spec is None):
+        errors.append("baseline_window and comparison_window must be declared together")
+    elif baseline_spec is not None:
+        declared = []
+        windows_valid = True
+        for label, spec in (("baseline_window", baseline_spec), ("comparison_window", comparison_spec)):
+            basis = spec.get("time_basis", scope.get("time_basis")) if isinstance(spec, dict) else scope.get("time_basis")
+            years = spec.get("window") if isinstance(spec, dict) else spec
+            if basis != scope.get("time_basis"):
+                errors.append(label + " uses a different time_basis and cannot be compared")
+                windows_valid = False
+            if (not isinstance(years, list) or len(years) != 2 or
+                    not all(isinstance(y, int) and not isinstance(y, bool) for y in years) or
+                    years[0] > years[1] or years[0] < window[0] or years[1] > window[1]):
+                errors.append(label + " must be an ordered two-year window inside scope.window")
+                windows_valid = False
+                years = [0, -1]
+            declared.append(years)
+        baseline_window, comparison_window = declared
+        if windows_valid and baseline_window[1] >= comparison_window[0]:
+            errors.append("baseline_window must precede and not overlap comparison_window")
+            windows_valid = False
+        if windows_valid and len(observed_years) >= 3 and len(independent) >= 6:
+            from_count = sum(r["document_count"] for r in rows if baseline_window[0] <= r["year"] <= baseline_window[1])
+            to_count = sum(r["document_count"] for r in rows if comparison_window[0] <= r["year"] <= comparison_window[1])
+            growth = {"from_year": baseline_window[0], "to_year": comparison_window[1],
+                      "from_count": from_count, "to_count": to_count,
+                      "absolute_delta": to_count - from_count, "kind": "descriptive_period_delta_not_significance",
+                      "baseline_window": baseline_window, "comparison_window": comparison_window,
+                      "time_basis": scope.get("time_basis")}
+    elif len(observed_years) >= 3 and len(independent) >= 6:
         first, last = observed_years[0], observed_years[-1]
         first_n = next(r["document_count"] for r in rows if r["year"] == first)
         last_n = next(r["document_count"] for r in rows if r["year"] == last)
         growth = {"from_year": first, "to_year": last, "from_count": first_n, "to_count": last_n,
                   "absolute_delta": last_n - first_n, "kind": "descriptive_period_delta_not_significance"}
+
+    statistic_records = {}
+    for row in rows:
+        statistic_records["year:%d" % row["year"]] = set(row["record_ids"])
+        for topic in row["topics"]:
+            statistic_records["topic:%s@%d" % (topic["topic"], row["year"])] = set(row["record_ids"])
+
+    def check_statistic_links(owner, statistic_refs, evidence_ids, record_ids=()):
+        linked_records = set()
+        for ref in statistic_refs or []:
+            linked_records.update(statistic_records.get(ref, set()))
+        for evidence_id in evidence_ids or []:
+            row = evidence.get(evidence_id)
+            if row is None:
+                continue
+            rid = row.get("record_id")
+            if rid not in independent:
+                errors.append(owner + " statistic evidence lacks an included record_id: " + evidence_id)
+                continue
+            year = independent[rid].get("dates", {}).get(scope.get("time_basis"))
+            if year is None or rid not in linked_records:
+                errors.append(owner + " evidence record/year does not match its statistic rows: " + evidence_id)
+        for rid in record_ids:
+            if rid in independent and rid not in linked_records:
+                errors.append(owner + " record_id does not match its statistic rows: " + rid)
+
     trend_claims = unique_ids(d.get("trend_claims", []), "trend_claim", errors)
     for cid, claim in trend_claims.items():
         refs(cid, claim.get("statistic_refs"), stats_keys, "statistic", errors)
         refs(cid, claim.get("evidence_ids"), evidence, "evidence", errors)
+        check_statistic_links(cid, claim.get("statistic_refs"), claim.get("evidence_ids"))
         if claim.get("kind") not in {"descriptive_count", "bounded_interpretation"}:
             errors.append(cid + " must distinguish counts from bounded interpretation")
         if growth is None and claim.get("requires_growth"):
@@ -102,6 +161,7 @@ def validate(data, sources, tools, evidence, base):
         refs(eid, event.get("statistic_refs"), stats_keys, "statistic", errors)
         refs(eid, event.get("record_ids"), independent, "included record", errors)
         refs(eid, event.get("evidence_ids"), evidence, "evidence", errors)
+        check_statistic_links(eid, event.get("statistic_refs"), event.get("evidence_ids"), event.get("record_ids") or [])
         if not event.get("interval") or not event.get("rationale"):
             errors.append(eid + " needs an evidence-based interval/rationale, not just a keyword label")
     phases = unique_ids(d.get("phases", []), "phase", errors)
