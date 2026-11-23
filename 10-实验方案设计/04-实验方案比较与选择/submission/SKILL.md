@@ -28,13 +28,18 @@ description: 为aligned_plan_comparison_and_choice任务把三个版本化实验
 
 ## 确定性同口径复核
 
-先读`references/comparison-schema.md`，把实际材料映射到`/app/work/comparison.json`，再执行：
+先读`references/comparison-schema.md`，把实际材料映射到`/app/work/comparison.json`。真实case必须先preflight、尽早落部分正式结果，最后做合同finalization；辅助JSON仅在`--auxiliary`中核对case_id，绝不充当正式顶层字段：
 
 ```bash
+python3 /skills/weekly-skill/scripts/case_io.py preflight --case /input/case.json --task /input/task.md --result /app/output/result.json --manifest /app/work/preflight.json --auxiliary /app/work/comparison.json
 python3 /skills/weekly-skill/scripts/plan_comparison.py --input /app/work/comparison.json --output /app/work/comparison-result.json
+# Agent按真实合同填完/app/output/result.json后：
+python3 /skills/weekly-skill/scripts/case_io.py finalize --case /input/case.json --task /input/task.md --result /app/output/result.json --manifest /app/work/preflight.json --report /app/work/finalization.json
 ```
 
-标准库脚本处理恰好3版，复算分币种成本、明示换算下的关键路径、五维来源、硬门与单位一致，只有无不确定候选且存在唯一全指标支配者才推荐；否则退出2，保留未选择理由及实测差值。唯一支配不是普遍“最佳”；case指定其他合法判据时按task执行并写清验证，不强行套权重。
+`case_io.py`为自包含标准库入口，读取case/task和case实际声明的本地材料，记录字节数/SHA-256及三版原ID、版本、来源，先写partial；缺材料、辅助/正式case_id不一致、preflight不完整均退出2。finalizer递归校验required/type/enum/items/嵌套对象，并拒绝未公开顶层auxiliary键；支持JSON-Schema-shaped output_contract，其他合同形态诚实报不支持而非猜测。
+
+比较脚本处理恰好3版，复算分币种成本、明示换算下的关键路径、五维来源、硬门与单位一致。全部criteria有`priority`和`priority_source`时按明示顺序做字典序选择；完全无优先级时才要求唯一全指标支配者。硬淘汰/未知仍先处理，优先级不完整、完全并列或无唯一支配均退出2并保留实测差值；不强行套权重。旧`plan_comparison.py --input/--output`合成测试调用保持不变。
 
 ## 结果、恢复与失败分支
 

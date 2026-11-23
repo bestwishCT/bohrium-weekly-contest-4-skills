@@ -78,8 +78,23 @@ def process(case, data, task, inv):
     for index, query in enumerate(queries):
         sqid = query.get("subquestion_id", query.get("question_id", ""))
         qid = norm_text(query.get("id", query.get("query_id", "q%02d" % (index + 1))))
-        executed = query.get("executed") is True
-        state = query.get("status", "observed" if executed else "planned")
+        explicit_executed = query.get("executed") is True
+        state = query.get("status", "observed" if explicit_executed else "planned")
+        response_locator = norm_text(query.get("response_locator", ""))
+        expression = norm_text(query.get("expression", query.get("query", "")))
+        snapshot = (
+            "executed" not in query
+            and state in {"success", "observed", "completed"}
+            and bool(response_locator)
+            and bool(expression)
+        )
+        executed = explicit_executed or snapshot
+        if "executed" in query:
+            execution_basis = "explicit_executed_true" if explicit_executed else "explicit_executed_not_true"
+        elif snapshot:
+            execution_basis = "completed_snapshot_status_query_and_response_locator"
+        else:
+            execution_basis = "snapshot_not_verified"
         success = executed and state in {"success", "observed", "completed", "partial"}
         hits = query.get("hits", query.get("record_ids", []))
         hits = [hits] if isinstance(hits, str) else hits
@@ -87,7 +102,7 @@ def process(case, data, task, inv):
         seen_direct.setdefault(sqid, set())
         newly_accepted = sorted(x for x in resolved if x in evidence.get(sqid, {}) and x not in seen_direct[sqid]) if success else []
         seen_direct[sqid].update(newly_accepted)
-        event = {"query_id": qid, "subquestion_id": sqid, "depends_on": query.get("depends_on", []), "purpose": query.get("purpose", ""), "trigger": query.get("trigger", ""), "expression": query.get("expression", query.get("query", "")), "source": query.get("source", ""), "status": state, "executed": executed, "response_locator": query.get("response_locator", ""), "input_hit_ids": hits, "new_direct_evidence_ids": newly_accepted, "observed_new_terms": query.get("new_terms", []), "trigger_audit": "documented" if index == 0 or norm_text(query.get("trigger", "")) else "unexplained_round"}
+        event = {"query_id": qid, "subquestion_id": sqid, "depends_on": query.get("depends_on", []), "purpose": query.get("purpose", ""), "trigger": query.get("trigger", ""), "expression": query.get("expression", query.get("query", "")), "source": query.get("source", ""), "status": state, "executed": executed, "execution_basis": execution_basis, "accepted_evidence_round": success, "response_locator": query.get("response_locator", ""), "input_hit_ids": hits, "new_direct_evidence_ids": newly_accepted, "observed_new_terms": query.get("new_terms", []), "trigger_audit": "documented" if index == 0 or norm_text(query.get("trigger", "")) else "unexplained_round"}
         by_sq_rounds.setdefault(sqid, []).append(event)
 
     coverage, stops, unresolved = [], [], {}
@@ -97,8 +112,8 @@ def process(case, data, task, inv):
         minimum = minimum if isinstance(minimum, int) and minimum > 0 else 1
         accepted = sorted(seen_direct.get(qid, set()))
         rounds = by_sq_rounds.get(qid, [])
-        successes = [x for x in rounds if x["executed"] and x["status"] in {"success", "observed", "completed", "partial"}]
-        failures = [x for x in rounds if x["executed"] and x["status"] not in {"success", "observed", "completed", "partial"}]
+        successes = [x for x in rounds if x["accepted_evidence_round"]]
+        failures = [x for x in rounds if x["execution_basis"] == "explicit_executed_true" and not x["accepted_evidence_round"]]
         dependencies_ok = all(dep in depth and len(seen_direct.get(dep, set())) >= max(1, int(by_id[dep].get("min_direct_sources", 1))) for dep in question["depends_on"])
         if question.get("ambiguity", False) or question.get("requires_human", False):
             stop, state = "terminology_or_scope_requires_human_adjudication", "unresolved"

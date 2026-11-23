@@ -42,7 +42,9 @@ python3 -B /skills/weekly-skill/scripts/research.py inspect \
 
 ### 3. 实际工具血缘
 
-每次真实检索、抓取、PDF/OCR、表格抽取或计算登记 ID、类型、完整参数、来源、状态、返回摘要、返回数（空检索为 0）、相对 artifact 路径和错误。产物必须实际存在。状态限用 `ok`、`empty`、`error`、`timeout`、`permission_denied`、`parse_failed`、`not_executed`。后步读取结构化 artifact，失败时只重跑受损调用及其后继。未发生的调用不得入成功日志。
+每次真实检索、抓取、PDF/OCR、表格抽取或计算登记 ID、类型、完整参数、来源、状态、返回摘要、返回数（空检索为 0）、相对 artifact 路径和错误。除 `not_executed` 外产物必须实际存在；未执行可没有 artifact，但必须有 `not_executed_reason` 或 `error`，整体保持 partial，且不得从该调用引入证据。状态限用 `ok`、`empty`、`error`、`timeout`、`permission_denied`、`parse_failed`、`not_executed`。后步读取结构化 artifact，失败时只重跑受损调用及其后继。未发生的调用不得入成功日志。
+
+真实工具返回 JSONL 时，设置 `artifact_format: "jsonl"`，并以 `record_id_field`、`source_id_field` 指定结果行中实际存在的字段；逐行必须是对象，record/source 必须与声明和证据对应。未知格式、缺映射或映射不一致均拒绝，不猜字段。普通 JSON 对象继续使用实际 `record_ids/source_ids` 或 `record_id/source_id`。
 
 ### 4. 证据矩阵与有界综合
 

@@ -38,6 +38,16 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def deep_merge(old, new):
+    merged = dict(old or {})
+    for key, value in new.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def ph(slide, idx):
     return next((s for s in slide.placeholders if s.placeholder_format.idx == idx), None)
 
@@ -214,7 +224,7 @@ def resolve_run_font_size(run, para, shape, prs):
     else:
         style_name = "otherStyle"
     tx_styles = master._element.find(P + "txStyles")
-    style_node = tx_styles.find(A + style_name) if tx_styles is not None else None
+    style_node = tx_styles.find(P + style_name) if tx_styles is not None else None
     size = _size_from_defrpr(style_node.find(A + f"lvl{level}pPr")) if style_node is not None else None
     if size is not None:
         return size, f"inherited-master-{style_name}"
@@ -490,9 +500,8 @@ def adapt(spec_path, outdir, work):
          "starting_sha256": sha(start), "final_sha256": sha(final), "slides": len(reopened.slides), "python": platform.python_version(),
          "python-pptx": pptx.__version__, "fonts": fonts, "all_pages_processed": report, "render": render})
     result = dict(spec["output_contract"])
-    if "case_id" not in result:
-        raise ValueError("materialized output_contract must include case_id")
-    result["case_id"] = spec["case_id"]
+    if result.get("case_id") != spec["case_id"]:
+        raise ValueError("materialized output_contract case_id must match the actual case_id")
     values = {"status": "partial", "artifacts": [str(final)], "primary_result": str(final), "output": str(final),
               "sources": [spec["source_material"]], "uncertainty": spec.get("uncertainty", []) + render["limitations"],
               "render": render, "validation": render, "template_report": "template_probe.json", "deviations": report}
@@ -500,7 +509,10 @@ def adapt(spec_path, outdir, work):
         if key in result:
             if result[key] is not None and not isinstance(value, type(result[key])):
                 raise TypeError(f"contract field {key} changed type")
-            result[key] = value
+            if key in ("render", "validation") and isinstance(result[key], dict):
+                result[key] = deep_merge(result[key], value)
+            else:
+                result[key] = value
     dump(outdir / "result.json", result)
     print(json.dumps({"pptx": str(final), "slides": len(reopened.slides), "pages_checked": len(report), "status": "structure-passed-render-pending"}, ensure_ascii=False))
 

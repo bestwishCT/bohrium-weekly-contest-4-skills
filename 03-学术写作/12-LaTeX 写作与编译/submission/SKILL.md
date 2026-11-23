@@ -16,8 +16,8 @@ description: "识别实际LaTeX主工程与模板依赖，最小修复公式、�
 3. 按缺类/宏包/字体、语法环境、未定义命令、BibTeX/Biber、浮动版面分类级联错误，追根文件和真实行号；先修上游根因，不堆宏包或隐藏错误。
 4. 最小编辑导言区与源码，保留公式语义、上下标、编号/引用、变量单位正斜体、表格数值和模板类文件；语义不清标待确认，不为编译删内容。
 5. 宽表跨页、浮动体、三线表和模板必填项按实际规范处理；不用极端缩小或截图掩盖。缺作者单位等必填信息标缺。
-6. 执行case实际指定的编译器与BibTeX/Biber多遍链，直至目录/引用稳定；记录每轮命令、退出码、关键错误和剩余警告，并打开PDF检查页数、??和溢出。
-7. 在干净副本复建并按要求保留.tex/bib/资源及真实PDF，PNG仅契约要求时生成。开发机未探测到pdflatex/xelatex，故verification只做静态检查且编译blocked，未生成PDF。
+6. 执行case实际指定的编译器与BibTeX/Biber多遍链，直至目录/引用稳定；记录每轮真实命令、退出码、关键错误和剩余警告，并打开PDF检查页数、??和溢出。审计器支持结构化 `build.commands`（每轮为参数数组、命令字符串或含 `command` 的对象），只以 `shell=False` 执行 pdflatex/xelatex/lualatex/latexmk/tectonic/bibtex/biber 白名单工具；不可用则逐轮保留 `not_executed/unverified`。
+7. 在干净副本复建并按要求保留.tex/bib/资源及真实PDF，PNG仅契约要求时生成。**先在 `/app/output/result.json` 写入诚实状态、真实产物路径与缺口，再运行交付审计**；任何静态检查、合成PDF或自报日志都不能冒充真实编译。
 
 ## 实测工具边界
 当前开发环境 `pdflatex`/`xelatex` 均未探测到；只保留可编辑源码静态回归，不声称编译、不生成虚假PDF。正式case若提供编译器，必须真实构建后才可写success。
@@ -35,8 +35,8 @@ description: "识别实际LaTeX主工程与模板依赖，最小修复公式、�
 - 只有 case 明确要求且工具实际存在时才制作 Office/LaTeX 二进制或其真实 PDF/PNG 预览；保留可编辑源，逐件打开核查。纯文本/Markdown任务不主动增加预览。缺编译器、字体或渲染器时明确标记 blocked，不伪造二进制。
 - 审计在 `/app/work` 生成独立审计输入，避免把测试数据混入正式输出；失败项回到具体源位置修复并重跑。禁止捏造实验、文献、DOI、人员、工具版本、分数、效率、白板或平台轨迹。
 - `audit.py` 以审计 JSON 所在目录为唯一材料根目录，从真实 `main` 递归解析 `\input`/`\include`；子文件、bib 和图片的符号链接或 `..` 均不得越界。它逐文件检查环境闭合，汇总跨文件 label/ref/cite，逐项保留相对文件与行号，并对循环 include、缺文件报错。跨文件合法引用不是错误。旧调用 `python3 scripts/audit.py INPUT.json` 保持不变。
-- 静态审计输出的 `compilation.status=not_executed`、`verification=unverified` 仅表示未真实编译。仅在输入声明 `build.status=success` 时，脚本才会对允许列表中的 TeX 编译器实际重跑所声明命令并记录真实命令、退出码和输出；编译器不存在或命令不可执行时判失败，绝不接受自报 success、伪造 PDF/日志。该重跑仍不代表官方 TeX 环境已验证。其他状态只审计记录，不自动编译。
-- 如需审计正式交付适配，在同一审计 JSON 增加真实 `case_id`、原 `output_contract`、`result_json` 和 `output_dir`（正式运行分别为 `/app/output/result.json` 与 `/app/output`）。脚本核对 result 的 case_id、原合同副本及合同全部顶层字段；不符合时输出 `partial` 并退出 1。通用脚本无法判断任意合同字段的科学语义，仍须逐字段人工核对。
+- 静态审计输出的 `compilation.status=not_executed`、`verification=unverified` 仅表示未真实编译。仅在输入声明 `build.status=success` 时，脚本才会逐轮重跑白名单命令并记录真实参数数组、每轮退出码、stdout/stderr；任一工具不存在或命令不可执行时不伪称成功。其他状态只审计记录，不自动编译。只要声明成功，即使工具不可用也继续检查真实PDF签名/EOF/页面对象和非空日志。该重跑仍不代表官方 TeX 环境已验证。
+- 如需审计正式交付适配，在同一审计 JSON 增加真实 `case_id`、原 `output_contract`、`result_json` 和 `output_dir`（正式运行分别为 `/app/output/result.json` 与 `/app/output`）；也可用 `case_json` 指向原case快照以避免手抄合同。非 `synthetic: true` 输入始终进入正式交付检查，省略元数据不会退回纯源码模式。允许输出根默认固定为 `/app/output`，不得用 `..` 改根；仅 `"synthetic": true` 的测试可显式以 `allowed_output_dir` 覆盖为审计材料根目录内的安全目录。脚本逐字段核对原合同及嵌套路径，逐件验证源文件/成品存在可读、不逃逸，PDF含真实签名/EOF与可机械识别页面；不符合时保留 `partial` 并非零退出。缺 `main`、`bib`、`build` 或不可执行轮次均转成分项失败，继续其余交付检查。通用脚本无法判断任意合同字段的科学语义，仍须逐字段人工核对。
 
 ## 最小非官方示意与验收
 以下仅为虚构“示意”，不是官方案例：将一段含“12 samples, p=0.04, Fig. 1 [A]”的短材料写入 `/app/work/audit_input.json`，执行上述 `audit.py`。应得到机器可读检查项；示例文本不进入 `/app/output`。实际案例必须替换为真实材料并产出契约指定的完整结果。

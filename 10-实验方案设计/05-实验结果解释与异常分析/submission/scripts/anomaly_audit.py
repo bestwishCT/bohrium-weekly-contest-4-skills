@@ -122,6 +122,8 @@ def prepare_records(records, errors, warnings):
         time_index = record.get("time_index")
         if isinstance(time_index, bool) or not isinstance(time_index, (int, float, str)):
             errors.append({"code": "TIME_INDEX_INVALID", "record_index": index, "value": time_index})
+        elif isinstance(time_index, (int, float)):
+            dec(time_index, f"record[{index}].time_index", errors)
         group_key = (record.get("metric"), record.get("sample"), record.get("batch"), record.get("channel"), record.get("unit"))
         time_types[group_key].add(type(time_index).__name__)
         unit = record.get("unit")
@@ -152,7 +154,14 @@ def prepare_records(records, errors, warnings):
 
 
 def time_sort_key(value):
-    return type(value).__name__, str(value)
+    if not isinstance(value, bool) and isinstance(value, (int, float)):
+        try:
+            number = Decimal(str(value))
+            if number.is_finite():
+                return 0, number
+        except (InvalidOperation, ValueError, TypeError):
+            pass
+    return 1, str(value)
 
 
 def trends(records):
@@ -227,10 +236,25 @@ def anomaly_results(data, records, errors, warnings):
     return results
 
 
-def review_math(data, errors, indexed, anomaly_by_cause):
-    currency = data.get("review_budget", {}).get("currency")
+def review_math(data, errors, indexed, anomaly_by_cause, warnings):
+    budget = data.get("review_budget", {})
+    budget_currency = budget.get("currency") if valid_id(budget.get("currency")) else None
+    declared_currencies = set()
+    for action in data.get("review_actions", []):
+        raw_items = action.get("cost_items")
+        if isinstance(raw_items, list):
+            declared_currencies.update(item.get("currency") for item in raw_items
+                                       if isinstance(item, dict) and valid_id(item.get("currency")))
+    currency = budget_currency
+    if currency is None and len(declared_currencies) == 1:
+        currency = next(iter(declared_currencies))
+    if budget_currency is None and len(declared_currencies) > 1:
+        errors.append({"code": "CURRENCY_MISMATCH", "expected": "one explicit common currency",
+                       "actual": sorted(declared_currencies)})
     total_minutes, total_cost = Decimal(0), Decimal(0)
     time_complete, cost_complete = bool(data.get("review_actions")), bool(data.get("review_actions"))
+    if currency is None:
+        cost_complete = False
     audited_actions = []
     if not data.get("review_actions"):
         errors.append({"code": "REVIEW_ACTION_REQUIRED"})
@@ -244,31 +268,49 @@ def review_math(data, errors, indexed, anomaly_by_cause):
         linked_cause = action.get("linked_cause")
         allowed = anomaly_by_cause.get(linked_cause) if linked_cause in causes else None
         resolve_refs(action.get("source_refs"), f"review_actions[{action.get('id')}].source_refs", indexed, errors, allowed)
-        minutes = nonnegative_dec(action.get("minutes"), f"action[{action.get('id')}].minutes", errors)
+        raw_minutes = action.get("minutes")
+        minutes = nonnegative_dec(raw_minutes, f"action[{action.get('id')}].minutes", errors) if raw_minutes is not None else None
         if minutes is not None:
             total_minutes += minutes
         else:
             time_complete = False
+            if raw_minutes is None:
+                warnings.append({"code": "REVIEW_TIME_UNKNOWN", "action": action.get("id"),
+                                 "uncertainty": "minutes were not supplied; the action remains proposed and the time total is unknown"})
         formulas = []
-        if not action.get("cost_items"):
+        raw_items = action.get("cost_items")
+        if not raw_items:
             cost_complete = False
-            errors.append({"code": "REVIEW_COST_MISSING", "action": action.get("id"), "action_required": "supply a sourced price or retain an unknown subtotal, never zero"})
-        for item in list_of_objects(action.get("cost_items", []), f"review_actions[{action.get('id')}].cost_items", errors):
-            quantity = nonnegative_dec(item.get("quantity"), f"action[{action.get('id')}].cost.quantity", errors)
-            price = nonnegative_dec(item.get("unit_price"), f"action[{action.get('id')}].cost.unit_price", errors)
-            if item.get("currency") != currency:
+            warnings.append({"code": "REVIEW_COST_UNKNOWN", "action": action.get("id"),
+                             "uncertainty": "no quotation/cost item was supplied; cost is unknown, not zero"})
+        for item in list_of_objects(raw_items or [], f"review_actions[{action.get('id')}].cost_items", errors):
+            raw_quantity, raw_price = item.get("quantity"), item.get("unit_price")
+            quantity = nonnegative_dec(raw_quantity, f"action[{action.get('id')}].cost.quantity", errors) if raw_quantity is not None else None
+            price = nonnegative_dec(raw_price, f"action[{action.get('id')}].cost.unit_price", errors) if raw_price is not None else None
+            item_currency = item.get("currency") if valid_id(item.get("currency")) else None
+            if raw_quantity is None or raw_price is None or item_currency is None:
                 cost_complete = False
-                errors.append({"code": "CURRENCY_MISMATCH", "action": action.get("id"), "expected": currency, "actual": item.get("currency")})
+                warnings.append({"code": "REVIEW_COST_UNKNOWN", "action": action.get("id"),
+                                 "uncertainty": "quantity, unit price or currency is missing; unknown cost is not zero"})
+            if item_currency is not None and currency is not None and item_currency != currency:
+                cost_complete = False
+                errors.append({"code": "CURRENCY_MISMATCH", "action": action.get("id"), "expected": currency, "actual": item_currency})
                 continue
-            if quantity is not None and price is not None:
+            if quantity is not None and price is not None and item_currency is not None and item_currency == currency:
                 amount = quantity * price
                 total_cost += amount
                 formulas.append(f"{quantity} {item.get('unit')} * {price} {currency}/{item.get('unit')} = {amount} {currency}")
             else:
                 cost_complete = False
         audited_actions.append({**action, "cost_formulas": formulas, "execution_status": "proposed_not_executed"})
-    limit_minutes = nonnegative_dec(data.get("review_budget", {}).get("time_limit_minutes"), "review_budget.time_limit_minutes", errors)
-    limit_cost = nonnegative_dec(data.get("review_budget", {}).get("amount"), "review_budget.amount", errors)
+    raw_limit_minutes = budget.get("time_limit_minutes")
+    raw_limit_cost = budget.get("amount")
+    limit_minutes = nonnegative_dec(raw_limit_minutes, "review_budget.time_limit_minutes", errors) if raw_limit_minutes is not None else None
+    limit_cost = nonnegative_dec(raw_limit_cost, "review_budget.amount", errors) if raw_limit_cost is not None else None
+    if limit_minutes is None:
+        warnings.append({"code": "REVIEW_TIME_BUDGET_UNKNOWN", "uncertainty": "no known time limit; no budget conflict can be concluded"})
+    if limit_cost is None:
+        warnings.append({"code": "REVIEW_COST_BUDGET_UNKNOWN", "uncertainty": "no known cost limit; no budget conflict can be concluded"})
     conflicts = []
     if time_complete and limit_minutes is not None and total_minutes > limit_minutes:
         errors.append({"code": "REVIEW_TIME_BUDGET_CONFLICT", "computed": str(total_minutes), "limit": str(limit_minutes), "unit": "minute"})
@@ -279,7 +321,9 @@ def review_math(data, errors, indexed, anomaly_by_cause):
     return {"actions": audited_actions, "total_minutes": str(total_minutes) if time_complete else None,
             "total_cost": str(total_cost) if cost_complete else None, "currency": currency,
             "totals_complete": time_complete and cost_complete,
-            "cost_formula": "sum(action quantity * unit price); proposed resources only", "budget_conflicts": conflicts}
+            "budget_known": {"time_limit_minutes": limit_minutes is not None, "amount": limit_cost is not None},
+            "cost_formula": "sum(known same-currency action quantity * unit price); null total if any component is unknown",
+            "budget_conflicts": conflicts}
 
 
 def process(data):
@@ -332,10 +376,14 @@ def process(data):
     validate_ids(review_actions, "review_actions", errors)
     review_data = dict(data)
     review_data["review_actions"] = review_actions
-    if not isinstance(review_data.get("review_budget"), dict):
+    if review_data.get("review_budget") is None:
+        review_data["review_budget"] = {}
+        warnings.append({"code": "REVIEW_BUDGET_UNKNOWN",
+                         "uncertainty": "review_budget was not supplied; no budget limit is assumed"})
+    elif not isinstance(review_data.get("review_budget"), dict):
         errors.append({"code": "REVIEW_BUDGET_OBJECT_REQUIRED"})
         review_data["review_budget"] = {}
-    reviews = review_math(review_data, errors, indexed, anomaly_by_cause)
+    reviews = review_math(review_data, errors, indexed, anomaly_by_cause, warnings)
     raw_next = list_of_objects(data.get("next_experiments", []), "next_experiments", errors)
     next_experiments = []
     cause_ids = {cause.get("id") for cause in raw_causes}
@@ -354,7 +402,10 @@ def process(data):
         allowed = anomaly_by_cause.get(linked_cause) if linked_cause in cause_ids else None
         resolve_refs(experiment.get("source_refs"), f"{at}.source_refs", indexed, errors, allowed)
         next_experiments.append({**experiment, "execution_status": "proposed_not_executed"})
-    return {"auxiliary_schema": SCHEMA, "case_id": data.get("case_id"), "status": "failed" if errors else "pass",
+    resource_unknown = any(warning.get("code", "").startswith("REVIEW_") and
+                           (warning.get("code", "").endswith("_UNKNOWN")) for warning in warnings)
+    status = "failed" if errors else ("partial" if resource_unknown else "pass")
+    return {"auxiliary_schema": SCHEMA, "case_id": data.get("case_id"), "status": status,
             "five_part_analysis": {
                 "trends": trends(records), "anomalies": anomalies,
                 "possible_causes": causes,

@@ -120,6 +120,39 @@ def public_tool(tool):
     return {k: copy.deepcopy(v) for k, v in tool.items() if k != "artifact_payload"}
 
 
+def load_tool_artifact(tool, base):
+    """Load a declared JSON object or explicitly mapped JSONL records."""
+    artifact_path = Path(tool["artifact"])
+    path = artifact_path if artifact_path.is_absolute() else base / artifact_path
+    artifact_format = tool.get("artifact_format", "json")
+    if artifact_format == "json":
+        artifact = load_json(path)
+        if not isinstance(artifact, dict):
+            raise InputError("JSON tool artifact must be an object")
+        return artifact
+    if artifact_format != "jsonl":
+        raise InputError("unknown tool artifact format: %s" % artifact_format)
+    record_field = tool.get("record_id_field")
+    source_field = tool.get("source_id_field")
+    if not isinstance(record_field, str) or not record_field or not isinstance(source_field, str) or not source_field:
+        raise InputError("JSONL artifact requires explicit record_id_field and source_id_field mappings")
+    records = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        if not line.strip():
+            raise InputError("JSONL artifact line %d is empty" % line_number)
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise InputError("invalid JSONL artifact line %d: %s" % (line_number, exc))
+        if not isinstance(item, dict):
+            raise InputError("JSONL artifact line %d must be an object" % line_number)
+        record_id, source_id = item.get(record_field), item.get(source_field)
+        if not isinstance(record_id, str) or not record_id or not isinstance(source_id, str) or not source_id:
+            raise InputError("JSONL artifact line %d lacks its declared record/source mapping" % line_number)
+        records.append({"record_id": record_id, "source_id": source_id})
+    return records
+
+
 def check_common(data, base):
     errors = []
     sources_list = require_list(data.get("sources", []), "sources")
@@ -141,13 +174,20 @@ def check_common(data, base):
             errors.append("tool %s lacks kind or parameters" % tid)
         if not tool.get("return_summary"):
             errors.append("tool %s lacks a truthful return summary" % tid)
+        if tool.get("status") == "not_executed" and not (tool.get("not_executed_reason") or tool.get("error")):
+            errors.append("pending tool %s lacks an explicit not_executed reason" % tid)
         artifact = tool.get("artifact")
-        if not artifact:
+        if not artifact and tool.get("status") != "not_executed":
             errors.append("tool %s lacks an artifact path, including for failures" % tid)
-        else:
+        elif artifact:
             path = Path(artifact)
             if not (path if path.is_absolute() else base / path).is_file():
                 errors.append("tool %s artifact is not retained: %s" % (tid, artifact))
+        if tool.get("status") == "ok" and tool.get("artifact_format", "json") not in {"json", "jsonl"}:
+            errors.append("tool %s has an unknown artifact format" % tid)
+        if tool.get("status") == "ok" and tool.get("artifact_format") == "jsonl":
+            if not tool.get("record_id_field") or not tool.get("source_id_field"):
+                errors.append("tool %s JSONL artifact lacks record/source mappings" % tid)
         if tool.get("status") == "empty" and tool.get("returned_count") != 0:
             errors.append("empty tool %s must report returned_count=0" % tid)
         if tool.get("status") in TOOL_BAD and not tool.get("error"):
@@ -192,28 +232,33 @@ def check_common(data, base):
             errors.append("evidence %s must come from a successful tool run" % eid)
             continue
         try:
-            artifact_path = Path(tool["artifact"])
-            artifact = load_json(artifact_path if artifact_path.is_absolute() else base / artifact_path)
+            artifact = load_tool_artifact(tool, base)
         except (InputError, KeyError) as exc:
             errors.append("evidence %s tool artifact cannot be checked: %s" % (eid, exc))
             continue
-        if not isinstance(artifact, dict):
-            errors.append("evidence %s tool artifact must be an object" % eid)
+        record_id = row.get("record_id")
+        if isinstance(artifact, list):
+            if record_id is not None:
+                if not any(item["record_id"] == record_id and item["source_id"] == row["source_id"] for item in artifact):
+                    errors.append("evidence %s record/source pair is absent from its JSONL tool artifact" % eid)
+            elif not any(item["source_id"] == row["source_id"] for item in artifact):
+                errors.append("evidence %s source_id is absent from its JSONL tool artifact" % eid)
             continue
         record_ids = artifact.get("record_ids", [])
         source_ids = artifact.get("source_ids", [])
-        record_ids = record_ids if isinstance(record_ids, list) else []
-        source_ids = source_ids if isinstance(source_ids, list) else []
+        record_ids = list(record_ids) if isinstance(record_ids, list) else []
+        source_ids = list(source_ids) if isinstance(source_ids, list) else []
         if artifact.get("record_id") is not None:
             record_ids.append(artifact["record_id"])
         if artifact.get("source_id") is not None:
             source_ids.append(artifact["source_id"])
-        record_id = row.get("record_id")
         if record_id is not None:
             if record_id not in record_ids:
                 errors.append("evidence %s record_id is absent from its tool artifact" % eid)
             if artifact.get("source_id") is not None and row["source_id"] != artifact["source_id"]:
                 errors.append("evidence %s source_id differs from its tool artifact" % eid)
+            elif source_ids and row["source_id"] not in source_ids:
+                errors.append("evidence %s source_id is absent from its tool artifact" % eid)
         elif row["source_id"] not in record_ids + source_ids:
             errors.append("evidence %s source_id is absent from its tool artifact" % eid)
     return sources, tools, evidence_by_id, errors
@@ -230,6 +275,8 @@ def materialize_tools(data, work):
 
 def outcome(evidence, tools, conflicts):
     failed = [t for t in tools.values() if t.get("status") in TOOL_BAD or t.get("status") == "not_executed"]
+    if any(t.get("status") == "not_executed" for t in failed):
+        return "partial", 5, failed
     if not evidence:
         return "blocked", 4, failed
     if failed:
@@ -274,18 +321,27 @@ def normalize_contract(contract):
             props[field["name"]] = spec
             if field.get("required"):
                 required.append(field["name"])
-        return {"type": "object", "properties": props, "required": required,
-                "additionalProperties": contract.get("additionalProperties", True)}, []
+        normalized = {"type": "object", "properties": props, "required": required,
+                      "additionalProperties": contract.get("additionalProperties", True)}
+        for key in ("$defs", "definitions"):
+            if key in contract:
+                normalized[key] = copy.deepcopy(contract[key])
+        return normalized, []
     if isinstance(fields, dict):
         return dict(contract, type="object", properties=fields,
-                    required=contract.get("required", list(fields))), []
+                    required=contract.get("required", [])), []
     if "properties" not in contract:
-        reserved = {"type", "required", "additionalProperties", "description", "$schema", "items", "enum"}
+        reserved = {"type", "required", "additionalProperties", "description", "$schema", "$defs",
+                    "definitions", "$ref", "items", "enum", "anyOf", "oneOf", "allOf", "pattern", "format"}
         direct = {k: v for k, v in contract.items() if k not in reserved and isinstance(v, dict)}
         if direct:
-            return {"type": "object", "properties": direct,
-                    "required": contract.get("required", list(direct)),
-                    "additionalProperties": contract.get("additionalProperties", True)}, []
+            normalized = {"type": "object", "properties": direct,
+                          "required": contract.get("required", []),
+                          "additionalProperties": contract.get("additionalProperties", True)}
+            for key in ("$defs", "definitions"):
+                if key in contract:
+                    normalized[key] = copy.deepcopy(contract[key])
+            return normalized, []
     return contract, []
 
 
@@ -302,16 +358,83 @@ def check_type(value, expected):
     return False
 
 
-def validate_schema(value, schema, path, errors, warnings):
+def resolve_local_ref(root, reference):
+    if not isinstance(reference, str) or not reference.startswith("#"):
+        raise ValueError("only local $ref values are supported")
+    if reference == "#":
+        return root
+    if not reference.startswith("#/"):
+        raise ValueError("local $ref must be a JSON pointer")
+    target = root
+    for encoded in reference[2:].split("/"):
+        part = encoded.replace("~1", "/").replace("~0", "~")
+        if isinstance(target, dict) and part in target:
+            target = target[part]
+        elif isinstance(target, list) and part.isdigit() and int(part) < len(target):
+            target = target[int(part)]
+        else:
+            raise ValueError("unresolved local $ref " + reference)
+    if not isinstance(target, dict):
+        raise ValueError("local $ref must point to a schema object")
+    return target
+
+
+def validate_schema(value, schema, path, errors, warnings, root=None, ref_stack=(), definition_errors=None):
     if not isinstance(schema, dict):
         return
-    if any(k in schema for k in ("oneOf", "anyOf", "allOf", "$ref", "pattern", "format")):
-        warnings.append(path + ": advanced schema constraints require manual review")
+    if root is None:
+        root = schema
+    if definition_errors is None:
+        definition_errors = errors
+    if "$ref" in schema:
+        reference = schema["$ref"]
+        if reference in ref_stack:
+            definition_errors.append(path + " has a cyclic local $ref " + str(reference))
+            return
+        try:
+            target = resolve_local_ref(root, reference)
+        except ValueError as exc:
+            definition_errors.append(path + ": " + str(exc))
+            return
+        validate_schema(value, target, path, errors, warnings, root, ref_stack + (reference,), definition_errors)
+        schema = {k: v for k, v in schema.items() if k != "$ref"}
+    if any(k in schema for k in ("oneOf", "allOf", "format")):
+        warnings.append(path + ": unsupported advanced schema constraints require manual review")
+    if "anyOf" in schema:
+        alternatives = schema["anyOf"]
+        matched = False
+        if not isinstance(alternatives, list) or not alternatives:
+            definition_errors.append(path + " anyOf must be a non-empty schema array")
+        else:
+            for alternative in alternatives:
+                if not isinstance(alternative, dict):
+                    definition_errors.append(path + " anyOf entries must be schema objects")
+                    continue
+                branch_errors, branch_warnings, branch_definition_errors = [], [], []
+                validate_schema(value, alternative, path, branch_errors, branch_warnings, root, ref_stack, branch_definition_errors)
+                for item in branch_warnings:
+                    if item not in warnings:
+                        warnings.append(item)
+                for item in branch_definition_errors:
+                    if item not in definition_errors:
+                        definition_errors.append(item)
+                if not branch_errors and not branch_warnings and not branch_definition_errors:
+                    matched = True
+            if not matched:
+                errors.append(path + " does not satisfy anyOf")
     if "type" in schema and not check_type(value, schema["type"]):
         errors.append(path + " violates declared type " + str(schema["type"]))
         return
     if "enum" in schema and value not in schema["enum"]:
         errors.append(path + " is outside declared enum")
+    if "pattern" in schema:
+        try:
+            pattern = re.compile(schema["pattern"])
+        except (re.error, TypeError) as exc:
+            definition_errors.append(path + " has an invalid declared pattern: " + str(exc))
+        else:
+            if isinstance(value, str) and pattern.search(value) is None:
+                errors.append(path + " does not match declared pattern")
     if isinstance(value, dict):
         for key in schema.get("required", []):
             if key not in value:
@@ -319,17 +442,17 @@ def validate_schema(value, schema, path, errors, warnings):
         props = schema.get("properties", {})
         for key, item in value.items():
             if key in props:
-                validate_schema(item, props[key], path + "." + key, errors, warnings)
+                validate_schema(item, props[key], path + "." + key, errors, warnings, root, ref_stack, definition_errors)
             elif schema.get("additionalProperties") is False:
                 errors.append(path + " has undeclared field " + key)
             elif isinstance(schema.get("additionalProperties"), dict):
-                validate_schema(item, schema["additionalProperties"], path + "." + key, errors, warnings)
+                validate_schema(item, schema["additionalProperties"], path + "." + key, errors, warnings, root, ref_stack, definition_errors)
     if isinstance(value, list):
         if len(value) < schema.get("minItems", 0):
             errors.append(path + " has too few items")
         if isinstance(schema.get("items"), dict):
             for index, item in enumerate(value):
-                validate_schema(item, schema["items"], "%s[%d]" % (path, index), errors, warnings)
+                validate_schema(item, schema["items"], "%s[%d]" % (path, index), errors, warnings, root, ref_stack, definition_errors)
     if isinstance(value, str) and len(value) < schema.get("minLength", 0):
         errors.append(path + " is shorter than minLength")
 

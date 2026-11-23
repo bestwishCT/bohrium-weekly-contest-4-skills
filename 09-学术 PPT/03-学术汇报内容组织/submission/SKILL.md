@@ -40,7 +40,7 @@ description: Organize existing research into an audience- and time-specific nati
 
 ## 调用和真实渲染
 
-技能安装根目录为 `/skills/weekly-skill`，资源按该目录相对路径引用。只需自包含文本脚本，不依赖个人模板。先依据 resources.yaml 检查可用 Python、库、Office renderer、字体及版本；生成要求 `python-pptx>=1.0`，真实渲染检查要求 LibreOffice/soffice、PyMuPDF、Pillow，安装依据环境说明。
+技能安装根目录为 `/skills/weekly-skill`，资源按该目录相对路径引用。只需自包含文本脚本，不依赖个人模板。先依据 resources.yaml 检查可用 Python、库、Office renderer、字体及版本；生成要求 `python-pptx>=1.0`，页检要求 PyMuPDF、Pillow。默认用 LibreOffice/soffice 导出；没有 soffice 时可检查已真实渲染的外部 PDF，但必须同时提供 `--external-pdf` 与 `--external-receipt`。
 
 ```bash
 export SKILL_DIR=/skills/weekly-skill
@@ -51,9 +51,9 @@ python3 "$SKILL_DIR/scripts/render_and_check.py" \
   --work /app/work/render
 ```
 
-渲染脚本从最终 PPTX 用 LibreOffice 导 PDF、逐页 PNG/contact sheet，检测页面数、尺寸、PDF 文本缺失/越界与源图裁切。若案例提供其他真实 Office renderer，用其版本和命令实测并做同等检查。工具缺失时非零退出、报告 `not-passed`，不得造 PDF/PNG 或以 HTML 拼版冒充。
+渲染脚本从最终 PPTX 用 LibreOffice 导 PDF、逐页 PNG/contact sheet，检测页面数、文字/媒体框及图片/图表槽位实际内容和明显溢出，并记录全部哈希。外部 PDF 回执必须含 renderer 名称/版本、完整命令或实际 tool invocation、退出码 0、非空执行日志/回执，以及与当前文件完全一致的 PPTX/PDF provenance SHA-256；输入 PDF 不在验证前删除，失败不登记为成品。工具或有效证据缺失时非零退出、报告 `not-passed`，不得造 PDF/PNG 或以 HTML 拼版冒充。
 
-逐页实际查看最终 PDF/PNG：主线与页序是否服务青众、claim 是否超过证据、数字/图号/公式是否正确、备注是否互补并按时、问答是否能回到原页与来源、允许备用页是否真实、master/页脚/字体/图片裁切是否保持。自动通过不认证科学质量或视觉人工复核；实看后才能记录视觉复核终态。真实渲染结果、来源和不确定性写回原契约对应字段。
+逐页实际查看最终 PDF/PNG：主线与页序是否服务青众、claim 是否超过证据、数字/图号/公式是否正确、备注是否互补并按时、问答是否能回到原页与来源、允许备用页是否真实、master/页脚/字体/图片裁切是否保持。自动通过不认证科学质量或全面视觉质量；只有 `--visual-review` 指向与当前 PPTX/PDF/逐页 PNG 哈希绑定、逐页 `actual_image_read: true` 且观察记录非空的 JSON，并且无其他待审项时，契约才可 `completed`。OCR、字体和科学证据待审必须保留。
 
 ## 最小非官方示例
 

@@ -81,9 +81,17 @@ def region_texts(text, metadata):
     return result
 
 
+def term_pattern(term):
+    """ASCII terms are whole words; CJK aliases use their literal declared form."""
+    if re.search(r"[A-Za-z0-9_]", term):
+        return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(term) + r"(?![A-Za-z0-9_])", re.I)
+    return re.compile(re.escape(term), re.I)
+
+
 def locate(text, phrase):
+    pattern = term_pattern(phrase)
     for number, line in enumerate(text.splitlines(), 1):
-        if phrase.casefold() in line.casefold():
+        if pattern.search(line):
             return "body#line=%d" % number, line.strip()
     return "body#offset=unknown", None
 
@@ -99,7 +107,7 @@ def category_evidence(category, regions, full_text, synonyms):
         best = None
         for form in forms:
             for region, text in regions.items():
-                if form.casefold() in text.casefold():
+                if term_pattern(form).search(text):
                     locator, quote = locate(full_text, form)
                     candidate = {"term": declared_term, "matched_form": form, "region": region,
                                  "weight": weights[region], "locator": locator, "quote": quote}
@@ -159,12 +167,54 @@ def contract_properties(contract):
     return {key: value for key, value in contract.items() if key not in reserved and isinstance(value, (dict, str))}
 
 
+def validate_contract(value, schema, path="result"):
+    """Validate the supported JSON-schema contract recursively, including nested items."""
+    if not isinstance(schema, dict):
+        return
+    if "enum" in schema and value not in schema["enum"]:
+        raise ValueError(path + ": value is not in enum")
+    kind = schema.get("type")
+    types = kind if isinstance(kind, list) else [kind] if kind else []
+    checks = {"object": dict, "array": list, "string": str, "boolean": bool}
+    valid = not types
+    for item in types:
+        if item == "null":
+            valid |= value is None
+        elif item == "integer":
+            valid |= isinstance(value, int) and not isinstance(value, bool)
+        elif item == "number":
+            valid |= isinstance(value, (int, float)) and not isinstance(value, bool)
+        elif item in checks:
+            valid |= isinstance(value, checks[item]) and (item != "string" or not isinstance(value, bool))
+    if not valid:
+        raise ValueError(path + ": expected " + str(kind))
+    if isinstance(value, dict):
+        required = schema.get("required", [])
+        if isinstance(schema.get("fields"), list):
+            required = list(required) + [f["name"] for f in schema["fields"]
+                                         if isinstance(f, dict) and f.get("required") and f.get("name")]
+        for name in required:
+            if name not in value:
+                raise ValueError(path + "." + name + ": required field missing")
+        for name, child in contract_properties(schema).items():
+            if name in value:
+                validate_contract(value[name], child if isinstance(child, dict) else {"type": child},
+                                  path + "." + name)
+    if isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for index, item in enumerate(value):
+            validate_contract(item, schema["items"], "%s[%d]" % (path, index))
+
+
 def write_result(case_path, output, payload):
     if not case_path:
         return
     case = load(case_path)
-    result = {"case_id": case.get("case_id", case.get("id", "unknown"))}
-    for name, spec in contract_properties(case.get("output_contract")).items():
+    contract = case.get("output_contract", {})
+    path = Path(output) / "result.json"
+    result = load(path) if path.exists() else {}
+    result["case_id"] = case.get("case_id", case.get("id", "unknown"))
+    # Merge only supplied fields: apply/rollback must not erase earlier canonical results.
+    for name, spec in contract_properties(contract).items():
         if name in result:
             continue
         if name in payload:
@@ -172,10 +222,14 @@ def write_result(case_path, output, payload):
         else:
             kind = spec.get("type") if isinstance(spec, dict) else spec
             result[name] = [] if kind == "array" else {} if kind == "object" else "" if kind == "string" else None
-    dump(Path(output) / "result.json", result)
+    for name in contract_properties(contract):
+        if name in payload:
+            result[name] = payload[name]
+    validate_contract(result, contract if isinstance(contract, dict) else {})
+    dump(path, result)
 
 
-def version_relations(records, relations):
+def version_relations(records, relations, source=None):
     output = []
     for record in records:
         for other in records:
@@ -193,10 +247,27 @@ def version_relations(records, relations):
             else:
                 continue
             output.append({"from": record["path"], "to": other["path"], "status": relation, "evidence": evidence})
+    known = {record["path"] for record in records}
     for relation in relations:
-        output.append({"from": relation.get("from"), "to": relation.get("to"),
-                       "status": relation.get("status", "version_candidate") if relation.get("evidence") else "version_candidate",
-                       "evidence": relation.get("evidence", "missing administrative evidence")})
+        evidence = relation.get("evidence")
+        locator = relation.get("locator")
+        if isinstance(evidence, dict):
+            locator = locator or evidence.get("locator")
+        elif isinstance(evidence, str):
+            match = re.search(r"body#line=\d+", evidence)
+            locator = locator or (match.group(0) if match else None)
+        if relation.get("from") not in known or relation.get("to") not in known or not locator:
+            continue
+        match = re.fullmatch(r"body#line=(\d+)", locator)
+        try:
+            text, _ = native_text(Path(source) / relation["from"])
+        except (OSError, ValueError, UnicodeError):
+            continue
+        if not match or not (1 <= int(match.group(1)) <= len(text.splitlines())):
+            continue
+        output.append({"from": relation["from"], "to": relation["to"],
+                       "status": relation.get("status", "version_candidate"),
+                       "evidence": evidence, "locator": locator})
     return output
 
 
@@ -266,12 +337,12 @@ def plan(args):
             primary = leaders[0]["directory"] if len(leaders) == 1 else None
             record = {"path": rel, "sha256": file_hash, "parser": parser_name, "metadata": metadata,
                       "metadata_sources": sources, "metadata_conflicts": conflicts, "labels": labels,
-                      "primary_directory": primary, "status": "classified" if primary else "review_required",
+                      "primary_directory": primary, "status": "review_required" if conflicts or not primary else "classified",
                       "parent_tags": [{"tag": label["parent"], "derived_from": label["tag"],
                                        "basis": "declared taxonomy parent, not a new content match"}
                                       for label in labels if label["parent"]],
-                      "review_reason": None if primary else ("metadata_or_classification_conflict" if conflicts else
-                                                            "ambiguous_primary" if len(leaders) > 1 else "insufficient_evidence")}
+                      "review_reason": "metadata_or_classification_conflict" if conflicts else
+                                       None if primary else "ambiguous_primary" if len(leaders) > 1 else "insufficient_evidence"}
             if primary and not conflicts:
                 target, missing = target_for(primary, metadata, template, file_hash, path.suffix.casefold() or ".bin")
                 record["target"] = target
@@ -303,7 +374,7 @@ def plan(args):
             operation["requested_target"] = operation.pop("target")
         elif operation["target"] in conflict_targets:
             operation["status"] = "conflict"
-    relationships = version_relations(records, rules.get("version_relations", []))
+    relationships = version_relations(records, rules.get("version_relations", []), source)
     plan_data = {"tool_version": VERSION, "source_root": str(source), "library_root": str(args.destination),
                  "inventory": inventory, "records": records, "operations": operations,
                  "duplicates": duplicate_groups, "version_relations": relationships,
@@ -312,7 +383,9 @@ def plan(args):
         {"inventory": inventory, "operations": operations}, sort_keys=True).encode()).hexdigest()[:16]
     dump(Path(args.work) / "classification-plan.json", plan_data)
     review_queue = [record["path"] for record in records if record["status"] == "review_required"]
-    report = {"status": "partial" if failures or conflicts or review_queue else "planned", "plan_id": plan_data["plan_id"],
+    report = {"status": "blocked" if not inventory else "partial" if failures or conflicts or review_queue else "planned",
+              "reason": "empty_inventory" if not inventory else None,
+              "plan_id": plan_data["plan_id"],
               "inventory": inventory, "classification": records, "records": records,
               "tags": [{"path": r["path"], "tags": [l["tag"] for l in r["labels"]]} for r in records],
               "operations": operations, "duplicates": duplicate_groups, "versions": relationships,
@@ -326,7 +399,7 @@ def plan(args):
     write_result(args.case, args.output, report)
     print(json.dumps({"status": report["status"], "classified": sum(r["status"] == "classified" for r in records),
                       "conflicts": len(conflicts), "dry_run": True}, ensure_ascii=False))
-    return 0
+    return 2 if not inventory else 0
 
 
 def append_journal(path, record):
@@ -386,15 +459,31 @@ def apply(args):
             changes.append({**base, "event": "failed", "reason": reason})
             failures.append({"path": operation["source"], "stage": "apply", "reason": reason})
     review_queue = [record["path"] for record in data["records"] if record["status"] == "review_required"]
-    accounted_paths = {operation["source"] for operation in data["operations"]}
+    operation_paths = {operation["source"] for operation in data["operations"]}
+    for record in data["records"]:
+        if record["status"] == "classified" and record["path"] not in operation_paths:
+            failures.append({"path": record["path"], "stage": "apply", "reason": "missing_operation"})
+    accounted_paths = set(operation_paths)
     accounted_paths.update(failure["path"] for failure in failures if failure.get("path"))
     accounted_paths.update(review_queue)
     inventory_paths = {item["path"] for item in data["inventory"]}
-    report = {"status": "partial" if failures or data["conflicts"] or review_queue else "completed",
-              "input_count": len(inventory_paths),
-              "accounting_conserved": accounted_paths == inventory_paths,
+    conserved = accounted_paths == inventory_paths
+    dispositions = []
+    for item in data["inventory"]:
+        path = item["path"]
+        operation = next((op for op in data["operations"] if op["source"] == path), None)
+        failure = next((failure for failure in failures if failure.get("path") == path), None)
+        disposition = operation["status"] if operation else "review_required" if path in review_queue else "failed" if failure else "unaccounted"
+        dispositions.append({"path": path, "disposition": disposition})
+    case_id = load(args.case).get("case_id", load(args.case).get("id", "unknown")) if args.case else "unknown"
+    report = {"status": "blocked" if not inventory_paths else "partial" if failures or data["conflicts"] or review_queue or not conserved else "completed",
+              "reason": "empty_inventory" if not inventory_paths else None,
+              "case_id": case_id, "input_count": len(inventory_paths),
+              "accounting_conserved": conserved,
               "unaccounted_inputs": sorted(inventory_paths - accounted_paths),
+              "dispositions": dispositions,
               "review_queue": review_queue, "plan_id": data["plan_id"], "classification": data["records"],
+              "tags": [{"path": r["path"], "tags": [l["tag"] for l in r["labels"]]} for r in data["records"]],
               "operations": data["operations"], "change_records": changes, "changes": changes,
               "duplicates": data["duplicates"], "versions": data["version_relations"],
               "conflicts": data["conflicts"], "failures": failures,
@@ -406,7 +495,7 @@ def apply(args):
     write_result(args.case, args.output, report)
     print(json.dumps({"status": report["status"], "committed": sum(c["event"] == "committed" for c in changes),
                       "failures": len(failures)}, ensure_ascii=False))
-    return 2 if failures or data["conflicts"] or review_queue else 0
+    return 2 if not inventory_paths or failures or data["conflicts"] or review_queue or not conserved else 0
 
 
 def rollback(args):

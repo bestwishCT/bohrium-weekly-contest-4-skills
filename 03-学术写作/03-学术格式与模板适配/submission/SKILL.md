@@ -19,7 +19,7 @@ description: "解析实际投稿或学位模板，映射标题、图表、参考
 6. 错误按规格抽取、样式映射、内容丢失或环境问题分类修复，每轮重跑受影响检查。无法保留批注、域等单列缺口，不以全栅格化掩盖。
 
 ## 本机字体验证边界
-开发机未检测到 Liberation Serif，verification仅验证规格/内容映射，未宣称完成真实字体导出或嵌入。正式case必须使用随题资源再执行导出与预览；缺失时按blocked/partial交付。
+开发机未检测到 Liberation Serif，verification只做合成OOXML ZIP/XML机械结构回归，未宣称完成真实字体导出、嵌入或Office渲染。正式case必须使用随题资源再执行导出与预览；脚本会读取SFNT name表核对字体family，缺失或无法可靠解析时标pending/blocked并以partial非零交付，不猜默认字号或自动通过。
 
 ## 真实运行入口与资源
 - 先完整读取 `/input/case.json` 与 `/input/task.md`，再读取 case 指向的全部实际材料；执行前也读取 `environment/resources.yaml`。以原始 `case_id`、章节范围、语言、格式和 `output_contract` 为唯一契约，Unknown 不猜测，未要求的附件不制造。
@@ -31,8 +31,10 @@ description: "解析实际投稿或学位模板，映射标题、图表、参考
 ## 增量执行、状态与异常
 按64次请求、900秒和单响应16384 tokens预算分块：先落盘材料索引与审计台账，再完成全部可核实正文，随后替换局部文本、分块重建，最后运行确定性审计。长文使用稳定ID和术语/参数状态，不能循环通读全文。
 - 状态区分材料缺失、科学/语义无法判断、工具或权限失败、部分完成；先保存诚实的部分成品和真实日志，能修JSON就修JSON，不删除已生成的真实产物。未执行的操作写未执行，不写成成功。
-- 只有 case 明确要求且工具实际存在时才制作 Office/LaTeX 二进制或其真实 PDF/PNG 预览；保留可编辑源，逐件打开核查。纯文本/Markdown任务不主动增加预览。缺编译器、字体或渲染器时明确标记 blocked，不伪造二进制。
+- 必须遵守原始case的 `output_contract` 和官方预览要求，同时保留可编辑Office成品及合同要求的真实PDF/PNG；不能因为本机无渲染器、旧示例未要求或只需修改格式就省略预览。只有真实renderer实际执行并打开核查后才能声明渲染成功；无真实renderer时明确写 `pending`/`blocked` 和缺口，不造图、不用结构检查替代视觉验收。纯文本/Markdown任务不主动增加合同外预览。
 - 审计在 `/app/work` 生成独立审计输入，避免把测试数据混入正式输出；失败项回到具体源位置修复并重跑。禁止捏造实验、文献、DOI、人员、工具版本、分数、效率、白板或平台轨迹。
+- **先写诚实 `/app/output/result.json`，再审计真实文件。** 审计JSON以 `case_json` 接原case，以 `result_json` 接交付记录，并提供 `source_file`、`template_file`（或在原case中提供）；`converted_file` 可省略并从合同 `deliverable` 取得。输出根默认 `/app/output`，只有 `synthetic: true` 测试可用材料根内的 `allowed_output_dir` 显式覆盖。脚本拒绝重复源ID、路径逃逸、缺失/不可读源模板成品、坏Office ZIP/XML、无真实页面的PDF及结构不完整PNG。
+- 实文件模式直接比较正文/页眉脚/脚注尾注/批注文本及公式、批注、域、媒体、嵌入对象和关系；只有case `allowed_differences` 明确允许的类别才可豁免，格式变化不免除对象保留。`style_requirements` 按实际 `docDefaults`→`basedOn`→direct/character style→theme 链检查字号和字体，`numbering_required` 检查numId/ilvl到abstractNum/lvl的解析。继承链缺失/循环、字体family无法从SFNT name表核实或包不可可靠解析均为pending，绝不填猜测默认值。旧的自报 `source_units/specs/applied` 映射模式只对 `synthetic: true` 回归开放，正式输入缺元数据不能借此绕过。此审计不是真实Office渲染。
 
 ## 最小非官方示意与验收
 以下仅为虚构“示意”，不是官方案例：将一段含“12 samples, p=0.04, Fig. 1 [A]”的短材料写入 `/app/work/audit_input.json`，执行上述 `audit.py`。应得到机器可读检查项；示例文本不进入 `/app/output`。实际案例必须替换为真实材料并产出契约指定的完整结果。

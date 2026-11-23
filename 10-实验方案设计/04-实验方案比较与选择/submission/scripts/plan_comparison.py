@@ -241,6 +241,28 @@ def compare(data):
     for criterion in criteria:
         if criterion.get("direction") not in {"min", "max"}:
             errors.append({"code": "CRITERION_DIRECTION_INVALID", "criterion": criterion.get("name")})
+    priority_requested = any("priority" in criterion or "priority_source" in criterion for criterion in criteria)
+    priority_order = []
+    if priority_requested:
+        seen_priorities = {}
+        for criterion in criteria:
+            name = criterion.get("name")
+            priority = criterion.get("priority")
+            if isinstance(priority, bool) or not isinstance(priority, int) or priority < 1:
+                errors.append({"code": "CRITERION_PRIORITY_INVALID", "criterion": name, "value": priority})
+                continue
+            if not valid_id(criterion.get("priority_source")):
+                errors.append({"code": "CRITERION_PRIORITY_SOURCE_REQUIRED", "criterion": name})
+            if priority in seen_priorities:
+                errors.append({"code": "DUPLICATE_CRITERION_PRIORITY", "criterion": name,
+                               "other_criterion": seen_priorities[priority], "priority": priority})
+            else:
+                seen_priorities[priority] = name
+            priority_order.append(criterion)
+        if len(priority_order) != len(criteria):
+            errors.append({"code": "CRITERION_PRIORITIES_INCOMPLETE",
+                           "reason": "either every declared criterion has a sourced unique priority or none does"})
+        priority_order.sort(key=lambda criterion: criterion["priority"])
     conversions = data.get("time_conversions", {})
     if not isinstance(conversions, dict):
         errors.append({"code": "TIME_CONVERSIONS_OBJECT_REQUIRED"})
@@ -281,7 +303,22 @@ def compare(data):
             except (InvalidOperation, ValueError, TypeError):
                 errors.append({"code": "CRITERION_VALUE_INVALID", "left_index": left, "right_index": right})
     selected_index = None
-    if eligible_indices and not errors and not any(audit["errors"] or audit["hard_gate"] == "indeterminate" for audit in audits):
+    comparison_ready = eligible_indices and not errors and not any(
+        audit["errors"] or audit["hard_gate"] == "indeterminate" for audit in audits)
+    if comparison_ready and priority_order:
+        def lexicographic_key(index):
+            key = []
+            for criterion in priority_order:
+                value = Decimal(audits[index]["actual_values_for_comparison"][criterion["name"]])
+                key.append(-value if criterion["direction"] == "max" else value)
+            return tuple(key)
+        try:
+            ranked = sorted(eligible_indices, key=lexicographic_key)
+            if len(ranked) == 1 or lexicographic_key(ranked[0]) != lexicographic_key(ranked[1]):
+                selected_index = ranked[0]
+        except (InvalidOperation, ValueError, TypeError, KeyError) as exc:
+            errors.append({"code": "CRITERION_VALUE_INVALID", "message": str(exc)})
+    elif comparison_ready:
         unique_dominant = [index for index in eligible_indices
                            if all(index == other or dominates(index, other) for other in eligible_indices)]
         if len(unique_dominant) == 1:
@@ -295,6 +332,8 @@ def compare(data):
             reason = "hard gate failed; lower cost or other metric cannot compensate"
         elif audit["hard_gate"] == "indeterminate":
             reason = "hard evidence, cost, time, units or criteria are incomplete; not treated as zero or satisfied"
+        elif selected_index is not None and priority_order:
+            reason = "selected by sourced lexicographic criteria priority; no aggregate score or invented weight"
         elif selected_index is not None and dominates(selected_index, index):
             reason = "selected plan weakly dominates on every declared criterion and strictly on at least one"
         else:
@@ -303,7 +342,8 @@ def compare(data):
     for audit in audits:
         errors.extend(audit["errors"])
     if not selected:
-        errors.append({"code": "NO_UNIQUE_DEFENSIBLE_SELECTION", "reason": "no eligible unique dominant plan or unresolved comparison evidence"})
+        errors.append({"code": "NO_UNIQUE_DEFENSIBLE_SELECTION",
+                       "reason": "no unique selection under sourced priorities or unique dominance, or unresolved comparison evidence"})
     sensitivity = []
     if selected_index is not None:
         base = audits[selected_index]["actual_values_for_comparison"]
@@ -321,7 +361,11 @@ def compare(data):
     return {"auxiliary_schema": SCHEMA, "case_id": data.get("case_id"), "status": "pass" if selected and valid else "no_recommendation",
             "selected_plan": selected, "version_audits": audits, "not_selected": not_selected,
             "eligible_plans": [audits[index]["ref"] for index in eligible_indices], "sensitivity": sensitivity, "global_errors": errors,
-            "selection_rule": "Hard failures/unknowns precede unique dominance on case-declared criteria; no invented weights or aggregate score.",
+            "criteria_priority": [{"name": criterion.get("name"), "priority": criterion.get("priority"),
+                                   "source": criterion.get("priority_source")} for criterion in priority_order],
+            "selection_rule": ("Hard failures/unknowns precede sourced lexicographic criteria priority; no invented weights or aggregate score."
+                               if priority_order else
+                               "Hard failures/unknowns precede unique dominance on case-declared criteria; no invented weights or aggregate score."),
             "scope": "Prospective or synthetic comparison only; no real experiment, supplier, booking or approval claim."}
 
 

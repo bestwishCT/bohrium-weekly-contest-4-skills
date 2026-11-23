@@ -8,10 +8,10 @@
 
 - `records[]`：`metric,sample,batch,channel,well,replicate,time_index,value,unit,role(control/test),quality(ok/saturated/out_of_range/missing),source{file,sheet,row}`。按实际维度给定位，不存在的维度可在Agent正式结果中说明，但不可编孔位。饱和/超量程/缺失不作精确数值过滤；原值仍在警告中存在。
 - `anomaly_rules[]`：`id,metric,batch,channel,time_index,control_sample,unit,deviation_gt,threshold_type(task_given/reference_calculated/exploratory),threshold_source`。控制重复在该维度取中位数，非控制对象`abs(value-median)>阈值`才标偏离。阈值来源不明不判异常；单位不同不提前统一；控制少于2只警告，不计算显著性。
-- 趋势按同一metric/sample/batch/channel/unit在每个时间点取可用读数中位数，再给首末点差；这是受限描述，不自动声称拐点、平台或因果。
+- 趋势按同一metric/sample/batch/channel/unit在每个时间点取可用读数中位数，再给首末点差；数值time_index用Decimal排序（如1,2,10），字符串保持字符串字典序且不擅自数值化，混合类型仍报结构错误。这是受限描述，不自动声称拐点、平台或因果。
 - `causes[]`：`id,statement,evidence_class(direct_observation/association/hypothesis),support_refs,counterevidence,remaining_alternatives`；按证据等级/ID排序，只保留候选，不制造湿实验原因。
 - `review_actions[]`：`id,action,linked_cause,expected_observation,supports_or_excludes,failure_branch,owner_role,minutes,cost_items,source_refs`。每行成本`quantity,unit,unit_price,currency`；资源公式是分钟和及同币种数量×单价和，状态恒为proposed_not_executed。
-- `next_experiments[]`保留`linked_cause,changed_variable,controlled_variables,judgment,source_refs`等实际计划，明确仅为建议。`review_budget`给`amount,currency,time_limit_minutes`，冲突真实报错。
+- `next_experiments[]`保留`linked_cause,changed_variable,controlled_variables,judgment,source_refs`等实际计划，明确仅为建议。`review_budget`可给`amount,currency,time_limit_minutes`，仅已知总量与已知预算冲突才报错；缺预算写unknown、不判冲突。缺minutes、quantity、unit_price或currency写不确定性且辅助状态为partial（退出0），相应合计为null而非0/默认CNY；其他已知同币种行仍保留真实公式。显式非法值、负数及真实超预算仍失败。
 
 ## 三类实际路线（只执行当前case实际出现的）
 

@@ -1,30 +1,35 @@
 {
   "synthetic_template": true,
-  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "note": "非官方结构示意；先写真实result.json再审计。record用于真实OOXML合同，legacy_mapping仅保留旧合成映射兼容。",
   "record": {
-    "source_units": [
-      {
-        "id": "",
-        "text": ""
+    "case_json": "case.json",
+    "result_json": "/app/output/result.json",
+    "output_dir": "/app/output",
+    "source_file": "source.docx",
+    "template_file": "template.docx",
+    "converted_file": "/app/output/converted.docx",
+    "style_requirements": {
+      "Normal": {
+        "font_size_pt": 12,
+        "font_family": "Liberation Serif"
       }
-    ],
-    "converted_units": [
-      {
-        "id": "",
-        "text": ""
-      }
-    ],
-    "specs": [
-      {
-        "key": "",
-        "value": "",
-        "source": ""
-      }
-    ],
+    },
+    "required_fonts": ["Liberation Serif"],
+    "font_resources": {
+      "Liberation Serif": "resources/LiberationSerif-Regular.ttf"
+    },
+    "numbering_required": true,
+    "allowed_differences": []
+  },
+  "synthetic_test_only": {
+    "synthetic": true,
+    "allowed_output_dir": "safe-output-under-audit-material-root"
+  },
+  "legacy_mapping": {
+    "synthetic": true,    "source_units": [{"id": "", "text": ""}],
+    "converted_units": [{"id": "", "text": ""}],
+    "specs": [{"key": "", "value": "", "source": ""}],
     "applied": {},
-    "font": {
-      "family": "Liberation Serif",
-      "revision": 3
-    }
+    "font": {"family": "Liberation Serif", "revision": 3}
   }
 }

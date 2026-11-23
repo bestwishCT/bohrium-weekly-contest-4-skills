@@ -28,6 +28,16 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def deep_merge(old, new):
+    merged = dict(old or {})
+    for key, value in new.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def number(value, field):
     if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
         raise ValueError(f"{field} must be numeric")
@@ -226,31 +236,105 @@ def target_layout(prs, name):
     return matches[0]
 
 
-def inherited_title_font_pt(title, slide):
-    """Read explicit OOXML inheritance levels; never invent a 24 pt default."""
-    from pptx.oxml.ns import qn
+A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 
-    candidates = [title.text_frame.paragraphs[0]] if title.text_frame.paragraphs else []
-    for paragraph in candidates:
-        for run in paragraph.runs:
-            if run.font.size is not None:
-                return run.font.size.pt
-        if paragraph.font.size is not None:
-            return paragraph.font.size.pt
-    idx = title.placeholder_format.idx
-    owners = [title]
-    layout_placeholder = placeholder(slide.slide_layout, idx)
+
+def _size_from_defrpr(parent):
+    if parent is None:
+        return None
+    node = parent.find(A + "defRPr")
+    if node is None or not node.get("sz"):
+        return None
+    try:
+        value = int(node.get("sz")) / 100
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _list_style_size(tx_body, level):
+    if tx_body is None:
+        return None
+    styles = tx_body.find(A + "lstStyle")
+    if styles is None:
+        return None
+    return _size_from_defrpr(styles.find(A + f"lvl{level}pPr"))
+
+
+def _placeholder_for(shape, layout_or_master):
+    if not shape.is_placeholder:
+        return None
+    idx = shape.placeholder_format.idx
+    return next((item for item in layout_or_master.placeholders
+                 if item.placeholder_format.idx == idx), None)
+
+
+def resolve_run_font_size(run, para, shape, prs):
+    """Resolve shape/layout/master/presentation OOXML inheritance without a 24 pt fallback."""
+    direct = run.font.size
+    if direct is not None:
+        return direct.pt, "explicit-run"
+    ppr = para._p.find(A + "pPr")
+    size = _size_from_defrpr(ppr)
+    if size is not None:
+        return size, "explicit-paragraph-default"
+    level = 1
+    if ppr is not None and ppr.get("lvl"):
+        try:
+            level = int(ppr.get("lvl")) + 1
+        except ValueError:
+            return None, "unresolved-invalid-level"
+    if not 1 <= level <= 9:
+        return None, "unresolved-invalid-level"
+    size = _list_style_size(shape.text_frame._txBody, level)
+    if size is not None:
+        return size, "inherited-shape-list-style"
+    layout = shape.part.slide_layout
+    layout_placeholder = _placeholder_for(shape, layout)
     if layout_placeholder is not None:
-        owners.append(layout_placeholder)
-    for owner in owners:
-        for level in owner._element.xpath("./p:txBody/a:lstStyle/a:lvl1pPr/a:defRPr"):
-            size = level.get("sz")
-            if size:
-                return int(size) / 100
-    for level in slide.slide_layout.slide_master._element.xpath("./p:txStyles/p:titleStyle/a:lvl1pPr/a:defRPr"):
-        size = level.get("sz")
-        if size:
-            return int(size) / 100
+        size = _list_style_size(layout_placeholder.text_frame._txBody, level)
+        if size is not None:
+            return size, "inherited-layout-placeholder"
+    master = layout.slide_master
+    if shape.is_placeholder:
+        style_name = "titleStyle" if shape.placeholder_format.idx == 0 else "bodyStyle"
+    else:
+        style_name = "otherStyle"
+    tx_styles = master._element.find(P + "txStyles")
+    style_node = tx_styles.find(P + style_name) if tx_styles is not None else None
+    size = _size_from_defrpr(style_node.find(A + f"lvl{level}pPr")) if style_node is not None else None
+    if size is not None:
+        return size, f"inherited-master-{style_name}"
+    # Some decks put the only explicit size on the same-idx master placeholder.
+    master_placeholder = _placeholder_for(shape, master)
+    if master_placeholder is not None:
+        size = _list_style_size(master_placeholder.text_frame._txBody, level)
+        if size is not None:
+            return size, "inherited-master-placeholder"
+    defaults = prs.part._element.find(P + "defaultTextStyle")
+    if defaults is not None:
+        size = _size_from_defrpr(defaults.find(A + f"lvl{level}pPr"))
+        if size is not None:
+            return size, "inherited-presentation-default"
+    return None, "unresolved-review-required"
+
+
+def inherited_title_font_pt(title, slide, prs=None):
+    """Read all explicit title inheritance levels; unresolved values remain pending."""
+    if prs is None:
+        prs = slide.part.package.presentation_part.presentation
+    paragraph = title.text_frame.paragraphs[0] if title.text_frame.paragraphs else None
+    if paragraph is not None:
+        for run in paragraph.runs:
+            size, _ = resolve_run_font_size(run, paragraph, title, prs)
+            if size is not None:
+                return size
+        if not paragraph.runs:
+            size, _ = resolve_run_font_size(paragraph.add_run(), paragraph, title, prs)
+            paragraph._p.remove(paragraph.runs[-1]._r)
+            if size is not None:
+                return size
     return None
 
 
@@ -447,7 +531,7 @@ def compose(spec_path, outdir):
             resolved_size = float(title_size)
             font_review = "explicit"
         else:
-            resolved_size = inherited_title_font_pt(title, slide)
+            resolved_size = inherited_title_font_pt(title, slide, prs)
             font_review = "resolved-inherited" if resolved_size is not None else "pending-inherited-font-size"
         if resolved_size is not None and title.height < Pt(100) and resolved_size > 36:
             # Compact slots use a smaller font cap without changing the template's geometry or larger title styles.
@@ -527,9 +611,7 @@ def compose(spec_path, outdir):
         if result[key] is not None and type(value) is not type(result[key]):
             raise TypeError(f"contract field {key} changed type")
         if key in ("render", "validation") and isinstance(result[key], dict):
-            merged = dict(result[key])
-            merged.update(value)
-            result[key] = merged
+            result[key] = deep_merge(result[key], value)
         elif key == "uncertainty" and isinstance(result[key], list):
             result[key] = result[key] + [item for item in value if item not in result[key]]
         else:

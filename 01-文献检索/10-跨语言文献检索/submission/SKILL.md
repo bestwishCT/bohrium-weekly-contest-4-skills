@@ -22,12 +22,12 @@ description: 基于有来源和许可的受控术语表开展双向跨语言文�
 ## 跨语言专属算法
 
 1. **受控术语表**：每条保存源/目标语言与原词、目标词、变体、学科范围、歧义上下文、attested/candidate 状态、来源和许可。目标词缺失进入 `term_gaps`，不武断唯一译名。
-2. **查询计划与实绩分开**：根据目标词和变体生成 `query_candidates`，只是未执行计划。真正 `language_queries` 必须来自实际执行/快照，记录方向、语种、expression、term_ids、source、response locator 和执行的翻译方式。
+2. **查询计划与实绩分开**：根据目标词和变体生成 `query_candidates`，只是未执行计划。真正 `language_queries` 必须来自实际执行/快照，记录方向、语种、expression、term_ids、source、response locator 和执行的翻译方式。`executed` 缺失时，只接受带 expression、明确完成状态和 response locator 的已提供快照，并记录 `execution_basis`；显式 false、planned 或无定位不推定执行。单数 `term_id` 可适配为数组，但与 `term_ids` 同时出现且冲突时必须拒绝，不从表达式猜术语。
 3. **视图识别**：分别保存 metadata、abstract、body language 和 full-text 可用性。abstract-only 无正文语言证据时 body language 强制 unknown；出版方 full translation 缺 attribution 要告警；语言不从界面文字猜。
 4. **重复核验**：重复视图只有 `duplicate_of` 指向真实视图且供给的 `content_sha256` 或实际规范化文本 SHA-256 一致时才确认 exact duplicate。各视图来源仍保留，仅从 nonduplicate view 统计中排除。
-5. **作品归并**：按显式 work_id 或规范 DOI 建立 work registry。相同 DOI 却映射不同 work_id 会形成 identity conflict，不静默改写。原文、译文、摘要视图都保存在正确作品下。
+5. **作品归并**：按显式 work_id、规范 DOI 及可核验的 `version_relations` 建立 work registry。版本关系须有实际端点、same-work/version 类型和 `source_locator`；冲突关系不得连接，各视图 DOI、版本和来源仍分别保留。相同 DOI 却映射不同 work_id 会形成 identity conflict，不静默改写。原文、译文、摘要视图都保存在正确作品下。
 6. **原文语义对齐**：alignment 同时给 source_view/target_view、逐字 source quote/target quote、双侧实际 locator 和 aligned/divergent/uncertain。两 quote 都必须在相应视图文本出现，语种与术语方向一致且属于同一作品；自映射、跨作品、缺 locator 或词面命中无有效 aligned evidence 时不得确认。
-7. **分别计数**：按方向×概念×变体矩阵区分已执行、命中、未命中和漏查。view hits 保留每个真实命中，confirmed views 按 view ID 去重，work hits 按作品去重；完全重复视图保留证据但另从 nonduplicate views 排除。误译、版本冲突和未知视图均保留原因。
+7. **分别计数**：按方向×概念×变体矩阵区分已执行、命中、未命中和漏查。view hits 保留每个真实命中，未验证指标按 `(query_id, view_id)` 去重并保留状态冲突，confirmed views 按 view ID 去重，work hits 按作品去重；完全重复视图保留证据但另从 nonduplicate views 排除。误译、版本冲突和未知视图均保留原因。
 8. **稳定性**：同输入保持术语、视图指纹、命中状态和作品归属稳定；新增语种或新作品必须有实际材料，不能外推未知语种能力。
 
 核心结构：

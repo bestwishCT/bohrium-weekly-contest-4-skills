@@ -54,7 +54,7 @@ description: Adapt real academic content to an actual PPTX master/layout system 
 
 ## 调用、真实导出与逐页复核
 
-技能安装根目录 `/skills/weekly-skill`，只按相对路径引用脚本。先以 resources.yaml 确认实际 Python、字体与原生 Office；生成需要 `python-pptx>=1.0`，渲染检查需要 LibreOffice/soffice、PyMuPDF、Pillow。安装按实际环境说明；不假设全局已装。
+技能安装根目录 `/skills/weekly-skill`，只按相对路径引用脚本。先以 resources.yaml 确认实际 Python、字体与原生 Office；生成需要 `python-pptx>=1.0`，页检需要 PyMuPDF、Pillow。默认用 LibreOffice/soffice 导出；没有 soffice 时可检查已真实渲染的外部 PDF，但必须同时提供 `--external-pdf` 与 `--external-receipt`。安装按实际环境说明；不假设全局已装。
 
 ```bash
 export SKILL_DIR=/skills/weekly-skill
@@ -66,9 +66,9 @@ python3 "$SKILL_DIR/scripts/render_and_check.py" \
   --work /app/work/render
 ```
 
-渲染脚本先核对 `adaptation_record.json` 的最终 PPTX SHA-256，再从最终 PPTX 通过 LibreOffice 生成 PDF、逐页 PNG/contact sheet，检查 PPTX/PDF 页数和比例、PDF 文本缺失/越界、图片裁切并记录渲染器/PDF 库版本。若资源提供其他原生 renderer，使用其真实命令和版本达到同等输出。工具缺失立刻非零、`not-passed`；哈希变化或陈旧预览保持 `partial`，不接受 HTML、SVG 拼版或手工图充当导出，也不要求先删可编辑 deck。
+渲染脚本先核对 `adaptation_record.json` 的最终 PPTX SHA-256，再生成或检查 PDF、逐页 PNG/contact sheet，检查页数和比例、文字/媒体框、图片/图表槽位实际内容和明显溢出并记录全部哈希。外部 PDF 回执必须含 renderer 名称/版本、完整命令或实际 tool invocation、退出码 0、非空执行日志/回执，以及匹配当前文件的 PPTX/PDF provenance SHA-256；输入 PDF 不预删，失败不登记成品。工具或有效证据缺失立刻非零、`not-passed`；哈希变化或陈旧预览保持 `partial`，不接受 HTML、SVG 拼版或手工图充当导出，也不要求先删可编辑 deck。
 
-逐页查看最终 PNG/PDF，不只读 OOXML：检查长标题/末行/表格、项目符号/公式、字体替换与乱码、图像分辨率和裁切、母版页脚/页码、前后页标题位置/留白/层级一致性以及 PPTX↔PDF 页序对应。自动 `automated-render-passed-visual-required` 后仍需实际视觉复核和科学核对；记录真实替换、低分辨率或本地软件差异。渲染完成后将真实状态、命令/退出码与限制写回原 output_contract 已存在字段，保留 case_id 和其他深层数据，不能留下固定 pending；自动渲染或视觉复核都不等于科学内容验证。
+逐页查看最终 PNG/PDF，不只读 OOXML：检查长标题/末行/表格、项目符号/公式、字体替换与乱码、图像分辨率和裁切、母版页脚/页码、前后页标题位置/留白/层级一致性以及 PPTX↔PDF 页序对应。自动 `automated-render-passed-visual-required` 后仍需实际视觉复核和科学核对；只有 `--visual-review` 指向与当前 PPTX/PDF/逐页 PNG 哈希绑定、逐页 `actual_image_read: true` 且观察非空的 JSON，并且无其他待审项时才可 `completed`。真实 OCR、字体、科学证据等待审项必须保留；自动渲染或视觉复核都不等于科学内容验证。写回仅限原 output_contract 字段，递归保留 case_id 和其他深层数据。
 
 ## 最小非官方示例
 

@@ -52,14 +52,19 @@ description: 解释真实实验表格、197条弯曲轨迹、MATLAB、多批次/
 
 ## 可复算异常与Iris工具
 
-构造/app/work输入后运行：
+真实case先运行自包含preflight，再构造/app/work输入；Agent填完正式合同后运行finalizer：
 
 ```bash
+python3 /skills/weekly-skill/scripts/case_io.py preflight --case /input/case.json --task /input/task.md --result /app/output/result.json --manifest /app/work/preflight.json --auxiliary /app/work/anomaly.json
 python3 /skills/weekly-skill/scripts/anomaly_audit.py --input /app/work/anomaly.json --output /app/work/anomaly-result.json
 python3 /skills/weekly-skill/scripts/iris_5x2.py --input /app/work/iris.json --output /app/output/iris-actual-run.json
+# Agent按真实合同填完/app/output/result.json后：
+python3 /skills/weekly-skill/scripts/case_io.py finalize --case /input/case.json --task /input/task.md --result /app/output/result.json --manifest /app/work/preflight.json --report /app/work/finalization.json
 ```
 
-首个脚本核对坐标/单位/质量标记，以实际控制中位数和给定阈值复算偏离及首末中位数差，按证据排序原因，并复算拟议复核的分钟和费用；预算冲突、单位冲突退出2。第二个脚本只在task允许这两种方法时运行5 split×2 estimator，输出实际10组合、预测和accuracy；配置或指数非法退出2。它不能代替task指定其他estimator的已核实真实实现。所有脚本stdout和退出状态需如实记录。
+`case_io.py`读取真实case/task及case声明的本地材料并记录字节数/SHA-256，先落partial；缺材料、辅助/正式case_id不一致、preflight不完整均退出2。finalizer递归校验required/type/enum/items/嵌套并拒绝未公开顶层auxiliary键。支持JSON-Schema-shaped output_contract；其他形态诚实报不支持。无Iris/auxiliary输入时省略相应`--auxiliary`和Iris命令，不伪造配置或组合。
+
+首个分析脚本核对坐标/单位/质量标记，以实际控制中位数和给定阈值复算偏离；数值time_index用Decimal排序，未知字符串不数值化。复核资源缺预算/报价写unknown和不确定性，未知合计为null，只有已知预算才判冲突；已知同币种数量×单价仍真实复算，负值、非法值和真实超预算退出2。第二个脚本只在task允许这两种方法时运行5 split×2 estimator，输出实际10组合、预测和accuracy；配置或指数非法退出2。它不能代替task指定其他estimator的已核实真实实现，也不把本地16个预测正确称为官方16/16。所有脚本stdout和退出状态需如实记录，旧`--input/--output`调用不变。
 
 ## 正式输出、恢复与限制
 

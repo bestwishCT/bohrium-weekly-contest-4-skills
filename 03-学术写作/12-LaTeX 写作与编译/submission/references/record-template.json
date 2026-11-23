@@ -1,16 +1,27 @@
 {
   "synthetic_template": true,
-  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "note": "非官方结构示意；先写真实result.json再审计。字段供审计输入使用，不是case output_contract。",
   "record": {
+    "case_json": "case.json",
+    "result_json": "/app/output/result.json",
+    "output_dir": "/app/output",
     "main": "main.tex",
     "bib": "refs.bib",
     "build": {
       "status": "success|failed|blocked|not_run|not_executed|unverified",
       "reason": "",
-      "command": "",
-      "exit_code": null,
-      "pdf": "",
-      "execution_log": ""
+      "commands": [
+        {"command": ["xelatex", "-interaction=nonstopmode", "main.tex"]},
+        {"command": ["biber", "main"]},
+        {"command": ["xelatex", "-interaction=nonstopmode", "main.tex"]}
+      ],
+      "exit_codes": [0, 0, 0],
+      "pdf": "/app/output/main.pdf",
+      "execution_log": "build.log"
     }
+  },
+  "synthetic_test_only": {
+    "synthetic": true,
+    "allowed_output_dir": "safe-output-under-audit-material-root"
   }
 }
