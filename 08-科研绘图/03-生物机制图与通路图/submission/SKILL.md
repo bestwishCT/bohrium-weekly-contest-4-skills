@@ -36,14 +36,14 @@ description: "把原始生物机制材料转换为可追溯的实体—边—区
    工具拒绝原地覆盖、未知/重叠目标、陈旧预期值、非 allow-list 属性、DTD 和位图包装；分段字节证明非目标保持。任何方向、端点、区室或数据改动都要更新机制审计并重新全图复核，不能只改箭头外观。源图无安全 ID 或只有位图时，明确实际可保留范围，不静默重画或捏造图层。
 
 ## 实际导出与字体
-- 先检查 `environment/resources.yaml`、`command -v python3 swiftc rsvg-convert inkscape` 和可用版本。生成/编辑只用 Python 3 标准库；`scripts/export.swift` 需 macOS 11+、AppKit、WebKit、PDFKit、`swiftc`。
-- 本机实测 Python 3.9.6、Apple Swift 6.3.3、WebKit 21624.5.1.11.3；Helvetica 名表版本 17.0d1e1，渲染解析为 Helvetica。SVG 字体栈为 `Helvetica,Arial,sans-serif`，其他系统按实际字体替换，并复查中文、希腊字母、上下标和粗细。
+- 先检查 `environment/resources.yaml`、`command -v python3 rsvg-convert inkscape magick soffice sips pdftoppm gs` 和可用版本。生成/编辑只用 Python 3 标准库；`scripts/export.py` 探测同一批真实渲染器并只执行实际存在的一个。
+- 本机实测 Python 3.9.6、sips（CoreGraphics）SVG→PNG 1200×760、PDF 预览回渲一致；未装 rsvg-convert/inkscape 时 PDF 以 `png_wrapped_raster` 方法封装真实 PNG 像素并在报告标注。SVG 字体栈为 `Helvetica,Arial,sans-serif`，其他系统按实际字体替换，并复查中文、希腊字母、上下标和粗细。
 - 同一最终 SVG 生成并回读：
   ```bash
-  swiftc "$SKILL/scripts/export.swift" -o /app/work/export-svg
-  /app/work/export-svg --input /app/output/pathway.svg --png /app/output/pathway.png --pdf /app/output/pathway.pdf --pdf-preview /app/output/pathway_pdf.png --report /app/output/export_report.json --width 1200 --height 760 --scale 1
+  SKILL=/skills/weekly-skill
+  python3 "$SKILL/scripts/export.py" --input /app/output/pathway.svg --png /app/output/pathway.png --pdf /app/output/pathway.pdf --pdf-preview /app/output/pathway_pdf.png --report /app/output/export_report.json --width 1200 --height 760
   ```
-  如现场存在其他渲染器，记录真实命令/版本、尺寸、分辨率、色彩/透明和字体参数；未实际成功不得改称完成。
+  报告记录真实发现顺序、命令、退出码、PNG 签名/像素、PDF 头/页数/media box 与逐文件 SHA-256；未发现的渲染器绝不声称执行，缺渲染器的输出写 `not_executed` 并保持 partial，不删除已成功格式。
 
 ## 三重质量门
 1. **机制语义**：把最终 SVG 反查至实体类型/同义名、边类型/方向、分支/反馈、区室和引文；检查跨膜位置和图例数据范围，杜绝逆因果和无来源节点。

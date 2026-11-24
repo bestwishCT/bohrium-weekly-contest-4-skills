@@ -20,17 +20,23 @@ description: "把论文、研究规划或会议材料转成带节点和关系证
 7. `scripts/audit.py render input.json output.svg` 的分层布局、文字换行和边标签避让共用同一份量化几何。审计据此计算节点/文字/边标签矩形、画布边界、非容器节点遮叠、文字压节点、边标签压节点或彼此重叠及非端点边穿节点；有实际交叠/裁切即非零计数并非零退出，未检查的字体像素、箭头描边像素、边边交叉和语义可读性明确为 partial/unknown。必须用现有浏览器或实际渲染器打开SVG并输出PNG/PDF，逐眼看文字、分支、连线和乱码。
 8. 节点过多先按用途归并/折叠并记录，不删核心风险/冲突；预览与当前哈希对应。无渲染器时保留图数据/SVG并如实partial，不伪造PNG。开发verification将用浏览器真实生成PNG。
 
-## 最新官方GitHub要求覆盖说明
-最新官方diff在总分之外新增公开作品链接附加分及提交目录根级 `GITHUB_URL.txt` 要求，覆盖旧提示中的“不需要GitHub”。当前没有用户提供的真实公开作品URL，因此**不得创建或伪造 `GITHUB_URL.txt`**；verification记录该要求为 blocked。不得自行建仓库、发布、提交或PR。
+## 真实公开作品链接
+提交目录根级 `GITHUB_URL.txt` 指向已经用户授权创建并公开验证的对应作品目录。资源中不得加入第二份链接文件或任意占位URL；未获用户新授权时不得自行建仓库、发布、提交或PR。
 
 ## 渲染调用
-检查：`python3 scripts/audit.py graph.json`；渲染：`python3 scripts/audit.py render graph.json map.svg`。脚本先拒绝无证据/断裂图，再计算并审计真实将写入SVG的几何；渲染模式即使发现几何错误也保留SVG供定位，但返回失败，不得把 `overlap_count: 0` 当作未检测项的通行证。普通父子矩形不豁免；仅显式 `container:true` 且完整包含直接子节点时，容器背景与该子节点/文字的有意嵌套不计遮叠，文字之间碰撞仍报错。开发合成fixture可用 `layout.canvas`、`layout.nodes`、`layout.edge_labels` 覆盖位置/尺寸来复现异常，不用于隐藏真实图问题。PNG须由现有浏览器或实际渲染器打开该SVG后生成，生成后用文件签名和像素尺寸检查；没有实际预览与逐眼检查不能标complete。
+开发期可独立检查：`python3 scripts/audit.py graph.json`；独立渲染：`python3 scripts/audit.py render graph.json map.svg`。正式case统一使用上述 `workflow.py --case ... --candidate ...`，从真实输入和 `output_contract` 生成 `result.json`。脚本先拒绝无证据/断裂图，再计算并审计真实将写入SVG的几何；渲染模式即使发现几何错误也保留SVG供定位，但返回失败，不得把 `overlap_count: 0` 当作未检测项的通行证。普通父子矩形不豁免；仅显式 `container:true` 且完整包含直接子节点时，容器背景与该子节点/文字的有意嵌套不计遮叠，文字之间碰撞仍报错。开发合成fixture可用 `layout.canvas`、`layout.nodes`、`layout.edge_labels` 覆盖位置/尺寸来复现异常，不用于隐藏真实图问题。PNG须由现有浏览器或实际渲染器打开该SVG后生成，生成后用文件签名和像素尺寸检查；没有实际预览与逐眼检查不能标complete。
 
 ## 真实运行入口与资源
 - 先完整读取 `/input/case.json` 与 `/input/task.md`，再读取 case 指向的全部实际材料；执行前也读取 `environment/resources.yaml`。以原始 `case_id`、章节范围、语言、格式和 `output_contract` 为唯一契约，Unknown 不猜测，未要求的附件不制造。
-- 平台把本技能安装到 `/skills/weekly-skill`。以技能根目录为基准使用 `scripts/audit.py` 和 `references/record-template.json`；例如 `python3 /skills/weekly-skill/scripts/audit.py /app/work/audit_input.json`。模板只是结构示意，不是答案。
+- 平台把本技能安装到 `/skills/weekly-skill`。先根据真实材料按 `references/record-template.json` 在 `/app/work/mindmap.json` 写图数据（模板只是结构示意，不是答案），再运行：
+  ```bash
+  python3 /skills/weekly-skill/scripts/workflow.py \
+    --case /input/case.json --task /input/task.md --input-dir /input \
+    --work /app/work --output /app/output --candidate /app/work/mindmap.json
+  ```
 - `/app/work` 保存只读输入快照清单、抽取文本、稳定ID、分块状态、审计输入/输出与中间稿；`/app/output` 只保存契约要求的完整可编辑成品、指定预览和 `result.json`。制作目录是 `/app/submission`，不要污染输入。
-- `result.json` 必须原样保留 `case_id` 和实际 `output_contract` 的全部原始字段，把成品、来源、状态、不确定性、变更、缺口落到契约指定字段；不得把示意字段强加给 case。各状态枚举以契约为准。
+- `workflow.py` 将 `materials` 的每个source ID映射到实际材料路径，读取文件字节并记录SHA-256与可读性；缺失材料不能靠空字符串悄悄通过。图结构验证通过才调用 `audit.py` 的真实SVG几何行为和renderer，写入 `/app/output/mindmap.svg` 及可读JSON；几何失败仍保留可定位SVG但返回partial与退出2。确认是 `data-node-id`/`data-path-id`矢量元素而非位图。
+- `result.json` 必须原样保留 `case_id` 和实际 `output_contract` 的全部原始字段，只写入图数据、材料账本、可编辑SVG、布局审计、失败、不确定性及变更等真实业务值。`status` 就地如实降级，禁止将尚未查看PNG写为complete；preview字段标记 `required_not_executed`。后续实际渲染并逐眼查读时才可按合同取用状态与不确定性继续修改，不能伪造人工复核。
 - 材料编目至少记录材料ID、真实路径、类型、版本线索、可读范围、缺失及定位方式；证据映射记录成品锚点、论断/对象、来源ID、精确位置、原文或数值、支持范围和处理动作。冲突双列，不静默择一。
 
 ## 增量执行、状态与异常

@@ -9,17 +9,22 @@ from common import Run, add_arguments, digest, paragraph_map, paragraphs, read_j
 RELATIONS = {"uses", "compares_with", "improves_over", "supports", "contradicts", "reports"}
 
 
+def internal_subgraph(selected_nodes, edges):
+    ids = set(selected_nodes)
+    selected_edges = [edge for edge in edges
+                      if edge.get("subject") in ids and edge.get("object") in ids]
+    return {"nodes": list(selected_nodes.values()), "edges": selected_edges}
+
+
 def execute_query(query, nodes, edges):
     kind = query.get("type")
     parameters = query.get("parameters", {})
-    selected_nodes = {node["node_id"]: node for node in nodes.values()}
-    selected_edges = list(edges)
+    result = internal_subgraph(nodes, edges)
     if kind == "nodes_by_source":
         wanted = parameters.get("source_id")
         selected_nodes = {key: node for key, node in nodes.items()
                           if any(ref.get("source_id") == wanted for ref in node.get("evidence", []))}
-        ids = set(selected_nodes)
-        selected_edges = [edge for edge in edges if edge["subject"] in ids and edge["object"] in ids]
+        result = internal_subgraph(selected_nodes, edges)
     elif kind == "neighbors":
         center = parameters.get("node_id")
         direction = parameters.get("direction", "both")
@@ -30,23 +35,61 @@ def execute_query(query, nodes, edges):
         for edge in selected_edges:
             ids.update([edge["subject"], edge["object"]])
         selected_nodes = {key: node for key, node in nodes.items() if key in ids}
+        result = {"nodes": list(selected_nodes.values()), "edges": selected_edges}
     elif kind == "edges_by_relation":
         relation = parameters.get("relation")
-        selected_edges = [edge for edge in edges if edge.get("relation") == relation]
+        selected_edges = [edge for edge in edges
+                          if edge.get("relation") == relation and
+                          edge.get("subject") in nodes and edge.get("object") in nodes]
         ids = {value for edge in selected_edges for value in (edge["subject"], edge["object"])}
         selected_nodes = {key: node for key, node in nodes.items() if key in ids}
+        result = {"nodes": list(selected_nodes.values()), "edges": selected_edges}
+    elif kind == "cross_source":
+        min_sources = parameters.get("min_sources", 2)
+        if isinstance(min_sources, bool) or not isinstance(min_sources, int) or min_sources <= 0:
+            raise ValueError("cross_source parameters.min_sources must be a strictly positive integer")
+        selected_nodes = {}
+        for key, node in nodes.items():
+            source_ids = {ref.get("source_id") for ref in node.get("evidence", [])
+                          if isinstance(ref, dict) and ref.get("source_id")}
+            if len(source_ids) >= min_sources:
+                selected_nodes[key] = node
+        result = internal_subgraph(selected_nodes, edges)
+        result["check"] = {
+            "min_sources": min_sources,
+            "matching_nodes": len(selected_nodes),
+            "explanation": "distinct nonempty evidence source_id values were counted; repeated evidence from one paper counts once; no nodes, instances or conditions were merged; executed retrieval is not completed open-world inference"
+        }
+    elif kind == "conflicts":
+        selected_edges = [edge for edge in edges
+                          if edge.get("relation") == "contradicts" and
+                          edge.get("subject") in nodes and edge.get("object") in nodes]
+        ids = {value for edge in selected_edges for value in (edge["subject"], edge["object"])}
+        selected_nodes = {key: node for key, node in nodes.items() if key in ids}
+        result = {"nodes": list(selected_nodes.values()), "edges": selected_edges,
+                  "check": {"relation": "contradicts", "examined_edges": len(edges),
+                                      "matching_internal_edges": len(selected_edges),
+                                      "explanation": "only explicit internal contradicts edges are returned; an empty result reports that this check found none, not that scientific conflict is impossible"}}
     elif kind == "unresolved":
         verdict = parameters.get("verdict", "no_determinate_relation")
         ids = set(parameters.get("node_ids", list(nodes)))
         selected_nodes = {key: node for key, node in nodes.items() if key in ids}
-        selected_edges = []
-        query_result = {"verdict": verdict, "reason": "no determinate edge is returned; absence is not a negative scientific result"}
+        result = {"nodes": list(selected_nodes.values()), "edges": [],
+                  "verdict": verdict,
+                  "reason": "no determinate edge is returned; absence is not a negative scientific result"}
     else:
         raise ValueError("unsupported executable query type: " + str(kind))
-    result = {"nodes": list(selected_nodes.values()), "edges": selected_edges}
-    if kind == "unresolved":
-        result.update(query_result)
     return result
+
+
+def query_evidence(subgraph):
+    """Return explicit evidence backlinks for every node and edge in a result."""
+    return {
+        "nodes": [{"node_id": node["node_id"], "evidence": node.get("evidence", [])}
+                  for node in subgraph["nodes"]],
+        "edges": [{"edge_id": edge["edge_id"], "evidence": edge.get("evidence", [])}
+                  for edge in subgraph["edges"]]
+    }
 
 
 def main():
@@ -88,22 +131,41 @@ def main():
         failures = []
         nodes = {}
         for node in nodes_list:
-            node_id = str(node.get("node_id", ""))
-            if not node_id or node_id in nodes:
+            raw_node_id = node.get("node_id")
+            node_id = raw_node_id if isinstance(raw_node_id, str) else ""
+            if not node_id.strip():
+                failures.append({"kind": "missing_or_empty_node_field", "node_id": node_id,
+                                 "fields": [name for name in ("node_id", "type", "label", "entity_scope")
+                                            if not isinstance(node.get(name), str) or not node.get(name).strip()]})
+                continue
+            if node_id in nodes:
                 failures.append({"kind": "missing_or_duplicate_node_id", "node_id": node_id})
                 continue
+            missing_fields = [name for name in ("type", "label", "entity_scope")
+                              if not isinstance(node.get(name), str) or not node.get(name).strip()]
+            if missing_fields:
+                failures.append({"kind": "missing_or_empty_node_field", "node_id": node_id,
+                                 "fields": missing_fields})
+            if node_id not in nodes and isinstance(node.get("entity_scope"), str) and node.get("entity_scope").strip() and node.get("entity_scope") not in {"concept", "source_instance"}:
+                failures.append({"kind": "entity_scope_required", "node_id": node_id})
             references = node.get("evidence", [])
             if not references:
                 failures.append({"kind": "node_without_evidence", "node_id": node_id})
+            if node.get("entity_scope") == "source_instance":
+                source_ids = {reference.get("source_id") for reference in references
+                              if isinstance(reference, dict) and reference.get("source_id")}
+                if len(source_ids) > 1:
+                    failures.append({"kind": "source_instance_multi_source", "node_id": node_id,
+                                     "source_ids": sorted(source_ids),
+                                     "reason": "a source-specific instance cannot combine evidence from different papers; inspect for an erroneous merge rather than merging automatically"})
             for reference in references:
                 source_id = reference.get("source_id")
                 paragraph_id = str(reference.get("paragraph_id", ""))
                 if "page" in reference or "page_number" in reference:
                     failures.append({"kind": "invented_pdf_page_anchor", "node_id": node_id})
                 if source_id not in indices or not reference.get("quote") or reference["quote"] not in indices.get(source_id, {}).get(paragraph_id, ""):
-                    failures.append({"kind": "node_source_quote_mismatch", "node_id": node_id})
-            if node.get("entity_scope") not in {"concept", "source_instance"}:
-                failures.append({"kind": "entity_scope_required", "node_id": node_id})
+                    failures.append({"kind": "node_source_quote_mismatch", "node_id": node_id,
+                                     "source_id": source_id, "paragraph_id": paragraph_id})
             nodes[node_id] = dict(node)
         edges = []
         for edge in edges_list:
@@ -121,7 +183,8 @@ def main():
                 source_id = reference.get("source_id")
                 paragraph_id = str(reference.get("paragraph_id", ""))
                 if source_id not in indices or not reference.get("quote") or reference["quote"] not in indices.get(source_id, {}).get(paragraph_id, ""):
-                    failures.append({"kind": "edge_source_quote_mismatch", "edge_id": edge_id})
+                    failures.append({"kind": "edge_source_quote_mismatch", "edge_id": edge_id,
+                                     "source_id": source_id, "paragraph_id": paragraph_id})
             edges.append(item)
         for document in inventory:
             if not any(reference.get("source_id") == document["source_id"] for node in nodes_list for reference in node.get("evidence", [])):
@@ -140,18 +203,18 @@ def main():
                     failures.append({"kind": "source_specific_instances_wrongly_merged", "node_ids": ids})
         query_results = []
         queries = candidate.get("queries", [])
-        if len(queries) < 3:
-            failures.append({"kind": "at_least_three_actual_queries_required"})
         for query in queries[:]:
             try:
                 subgraph = execute_query(query, nodes, edges)
                 query_results.append({"query_id": query.get("query_id"), "query": query,
                                       "executed": True, "result": subgraph,
-                                      "evidence": [edge.get("evidence", []) for edge in subgraph["edges"]]})
+                                      "evidence": query_evidence(subgraph)})
             except Exception as error:
                 failures.append({"kind": "query_execution_failed", "query_id": query.get("query_id"), "reason": str(error)})
                 query_results.append({"query_id": query.get("query_id"), "query": query,
                                       "executed": False, "result": None, "failure": str(error)})
+        if sum(item["executed"] for item in query_results) < 3:
+            failures.append({"kind": "at_least_three_actual_queries_required"})
         status = "partial" if failures or run.uncertainty else "success"
         graph = {"nodes": list(nodes.values()), "edges": edges,
                  "alias_decisions": alias_decisions, "sources": inventory}
@@ -159,7 +222,7 @@ def main():
         reread = read_json(run.output / "graph.json")
         if len(reread["nodes"]) != len(nodes) or len(reread["edges"]) != len(edges):
             raise ValueError("graph JSON readback mismatch")
-        run.changes.append("kept independent source metadata, JATS paragraph anchors and executed query results; no PDF-page claims")
+        run.changes.append("kept independent source metadata and JATS anchors; executed evidence-linked cross_source/conflicts and other DSL queries without open-world inference or PDF-page claims")
         run.finish({"status": status, "graph": graph, "nodes": list(nodes.values()), "edges": edges,
                     "alias_decisions": alias_decisions, "queries": query_results,
                     "failures": failures, "sources": inventory,
