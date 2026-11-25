@@ -4,6 +4,8 @@
 import argparse
 import hashlib
 import json
+import math
+import re
 import sys
 from pathlib import Path
 
@@ -24,6 +26,11 @@ def parse_args():
         action='append',
         default=[],
         help='补充实际材料路径；可重复。相对路径以case.json目录为基准。',
+    )
+    parser.add_argument(
+        '--finalize',
+        action='store_true',
+        help='校验已有result.json的嵌套required/type/enum/items；失败时保留内容并标记partial。',
     )
     return parser.parse_args()
 
@@ -86,12 +93,100 @@ def catalog_materials(case, case_path, extra_paths):
     return catalog
 
 
+def index_manuscript(text):
+    """Build exact character anchors for UTF-8 text; sentence splits are candidates only."""
+    sections, paragraphs, sentences = [], [], []
+    current = None
+    buffer = []
+    buffer_start = None
+    offset = 0
+
+    def new_section(title, level):
+        nonlocal current
+        current = {
+            'id': 'S' + str(len(sections) + 1),
+            'title': title,
+            'heading_level': level,
+            'paragraph_count': 0,
+        }
+        sections.append(current)
+
+    def flush():
+        nonlocal buffer, buffer_start
+        if not buffer or current is None:
+            buffer, buffer_start = [], None
+            return
+        raw = ''.join(buffer)
+        left = len(raw) - len(raw.lstrip())
+        right = len(raw.rstrip())
+        paragraph_text = raw[left:right]
+        if paragraph_text:
+            current['paragraph_count'] += 1
+            paragraph_id = current['id'] + '.P' + str(current['paragraph_count'])
+            start = buffer_start + left
+            end = buffer_start + right
+            paragraphs.append({
+                'id': paragraph_id,
+                'section_id': current['id'],
+                'section_title': current['title'],
+                'text': paragraph_text,
+                'start_char': start,
+                'end_char': end,
+            })
+            candidate_pattern = re.compile(r'.+?(?:[.!?。！？]+(?=\s|$)|\Z)', re.DOTALL)
+            count = 0
+            for match in candidate_pattern.finditer(paragraph_text):
+                candidate = match.group(0)
+                candidate_left = len(candidate) - len(candidate.lstrip())
+                candidate_right = len(candidate.rstrip())
+                candidate = candidate[candidate_left:candidate_right]
+                if not candidate:
+                    continue
+                count += 1
+                sentences.append({
+                    'id': paragraph_id + '.Z' + str(count),
+                    'paragraph_id': paragraph_id,
+                    'text': candidate,
+                    'start_char': start + match.start() + candidate_left,
+                    'end_char': start + match.start() + candidate_right,
+                    'review_required': True,
+                })
+        buffer, buffer_start = [], None
+
+    for line in text.splitlines(keepends=True):
+        heading = re.match(r'^\s*(#{1,6})\s+(.+?)\s*#*\s*(?:\r?\n)?$', line)
+        numbered = re.match(r'^\s*(\d+(?:\.\d+){0,5})\s+(\S.*?)\s*(?:\r?\n)?$', line)
+        if heading or numbered:
+            flush()
+            if heading:
+                new_section(heading.group(2), len(heading.group(1)))
+            else:
+                new_section(numbered.group(1) + ' ' + numbered.group(2), numbered.group(1).count('.') + 1)
+        elif not line.strip():
+            flush()
+        else:
+            if current is None:
+                new_section('未命名起始部分', None)
+            if buffer_start is None:
+                buffer_start = offset
+            buffer.append(line)
+        offset += len(line)
+    flush()
+    return {
+        'sections': sections,
+        'paragraphs': paragraphs,
+        'sentence_candidates': sentences,
+        'character_count': len(text),
+        'sentence_note': '句子为确定性候选切分，缩写、小数和跨行情况须由Agent回读；字符区间与段落原文可机械复核。',
+        'possible_truncation_markers': [
+            marker for marker in ('[truncated]', '[...]', '……', '…') if marker in text
+        ],
+    }
+
+
 def public_fields(output_contract):
     """Support a direct field map or an object JSON Schema without merging the two."""
-    if (
-        isinstance(output_contract.get('properties'), dict)
-        and output_contract.get('type') == 'object'
-    ):
+    if isinstance(output_contract.get('properties'), dict):
         return output_contract['properties']
     return output_contract
 
@@ -104,17 +199,37 @@ def empty_value(spec):
     value_type = spec.get('type')
     if value_type == 'array':
         return []
-    if value_type == 'object':
-        return {}
+    if value_type == 'object' or isinstance(spec.get('properties'), dict):
+        return {
+            field: empty_value(child)
+            for field, child in spec.get('properties', {}).items()
+        }
+    if value_type is None and not {'enum', 'items', 'required'} & set(spec):
+        return {field: empty_value(child) for field, child in spec.items()}
     if value_type == 'string':
+        allowed = spec.get('enum')
+        if isinstance(allowed, list) and 'not_reported' in allowed:
+            return 'not_reported'
         return ''
+    if value_type == 'boolean':
+        return False
     return None
 
 
 def initial_public_value(field, spec, gaps):
-    """Map partial state to existing public fields only; never add audit fields."""
+    """Map partial state recursively to declared fields; never add audit fields."""
     normalized = field.lower()
     value_type = spec.get('type') if isinstance(spec, dict) else None
+    if isinstance(spec, dict) and (value_type == 'object' or isinstance(spec.get('properties'), dict)):
+        return {
+            child_field: initial_public_value(child_field, child_spec, gaps)
+            for child_field, child_spec in spec.get('properties', {}).items()
+        }
+    if isinstance(spec, dict) and value_type is None and not {'enum', 'items', 'required'} & set(spec):
+        return {
+            child_field: initial_public_value(child_field, child_spec, gaps)
+            for child_field, child_spec in spec.items()
+        }
     if 'status' in normalized:
         enum = spec.get('enum') if isinstance(spec, dict) else None
         if isinstance(enum, list):
@@ -127,6 +242,94 @@ def initial_public_value(field, spec, gaps):
         if value_type in (None, 'string'):
             return reason
     return empty_value(spec)
+
+
+def matches_type(value, expected):
+    checks = {
+        'object': lambda item: isinstance(item, dict),
+        'array': lambda item: isinstance(item, list),
+        'string': lambda item: isinstance(item, str),
+        'boolean': lambda item: isinstance(item, bool),
+        'integer': lambda item: isinstance(item, int) and not isinstance(item, bool),
+        'number': lambda item: isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item),
+        'null': lambda item: item is None,
+    }
+    return expected not in checks or checks[expected](value)
+
+
+def validate_contract(value, spec, path='result'):
+    """Recursive JSON-Schema subset plus legacy direct-field-map validation."""
+    errors = []
+    if isinstance(spec, dict) and (
+        'type' in spec or 'properties' in spec or 'required' in spec or 'enum' in spec or 'items' in spec
+    ):
+        declared = spec.get('type', 'object' if 'properties' in spec else None)
+        kinds = declared if isinstance(declared, list) else [declared]
+        if declared is not None and not any(matches_type(value, kind) for kind in kinds):
+            return [path + ' has incorrect type for ' + str(declared)]
+        if 'enum' in spec and value not in spec['enum']:
+            errors.append(path + ' is outside declared enum ' + repr(spec['enum']))
+        if isinstance(value, dict):
+            properties = spec.get('properties', {})
+            for field in spec.get('required', []):
+                if field not in value:
+                    errors.append(path + '.' + field + ' is required')
+            for field, child in properties.items():
+                if field in value:
+                    errors.extend(validate_contract(value[field], child, path + '.' + field))
+        if isinstance(value, list) and isinstance(spec.get('items'), dict):
+            for index, item in enumerate(value):
+                errors.extend(validate_contract(item, spec['items'], '%s[%d]' % (path, index)))
+        return errors
+    if isinstance(spec, dict):
+        if not isinstance(value, dict):
+            return [path + ' has incorrect type for object']
+        for field, child in spec.items():
+            if field not in value:
+                errors.append(path + '.' + field + ' is required')
+            else:
+                errors.extend(validate_contract(value[field], child, path + '.' + field))
+        return errors
+    if isinstance(spec, list):
+        if not isinstance(value, list):
+            return [path + ' has incorrect type for array']
+        if spec:
+            for index, item in enumerate(value):
+                errors.extend(validate_contract(item, spec[0], '%s[%d]' % (path, index)))
+        return errors
+    expected = type(spec)
+    if value is None or not isinstance(value, expected) or (expected is not bool and isinstance(value, bool)):
+        errors.append(path + ' has incorrect type for ' + expected.__name__)
+    return errors
+
+
+def validate_result(result, output_contract):
+    if isinstance(output_contract.get('properties'), dict):
+        return validate_contract(result, output_contract)
+    if not isinstance(result, dict):
+        return ['result has incorrect type for object']
+    errors = []
+    for field, spec in output_contract.items():
+        if field not in result:
+            errors.append('result.' + field + ' is required')
+        else:
+            errors.extend(validate_contract(result[field], spec, 'result.' + field))
+    return errors
+
+
+def mark_partial(result, output_contract):
+    if not isinstance(result, dict) or 'status' not in result:
+        return
+    spec = public_fields(output_contract).get('status')
+    allowed = spec.get('enum') if isinstance(spec, dict) else None
+    if isinstance(allowed, list):
+        if result.get('status') == 'partial' and 'partial' in allowed:
+            return
+        if 'partial' in allowed:
+            result['status'] = 'partial'
+        return
+    if spec is None or isinstance(spec, str) or (isinstance(spec, dict) and spec.get('type') == 'string'):
+        result['status'] = 'partial'
 
 
 def write_json(path, value):
@@ -155,6 +358,26 @@ def main():
     work_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.finalize:
+        result_path = output_dir / 'result.json'
+        result = json.loads(result_path.read_text(encoding='utf-8'))
+        errors = []
+        if not isinstance(result, dict) or result.get('case_id') != case_id:
+            errors.append('result.case_id must exactly match the original case_id')
+        errors.extend(validate_result(result, output_contract))
+        if errors:
+            mark_partial(result, output_contract)
+            write_json(result_path, result)
+        report = {
+            'case_id': case_id,
+            'status': 'pass' if not errors else 'partial',
+            'errors': errors,
+            'validation': 'recursive required/type/enum/items; original case_id checked',
+        }
+        write_json(work_dir / 'finalization.json', report)
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if not errors else 2
+
     materials = catalog_materials(case, case_path, args.material)
     gaps = [PARTIAL_REASON]
     if not materials:
@@ -162,6 +385,21 @@ def main():
     missing = [item['material_id'] for item in materials if item['status'] != 'readable']
     if missing:
         gaps.append('以下已声明材料不可读：' + '、'.join(missing) + '。')
+
+    manuscript_indexes = []
+    for material in materials:
+        path = Path(material['resolved_path'])
+        if material['status'] != 'readable' or path.suffix.lower() not in {'.md', '.txt', '.text', '.tex'}:
+            continue
+        try:
+            text = path.read_text(encoding='utf-8')
+            index = index_manuscript(text)
+            index.update({'material_id': material['material_id'], 'source_path': str(path), 'sha256': material['sha256']})
+            manuscript_indexes.append(index)
+        except (OSError, UnicodeError) as exc:
+            gaps.append('文本材料 %s 无法按UTF-8建立句段索引：%s。' % (material['material_id'], exc))
+    if manuscript_indexes:
+        write_json(work_dir / 'manuscript-index.json', {'documents': manuscript_indexes})
 
     fields = public_fields(output_contract)
     result = {'case_id': case_id}
@@ -176,6 +414,8 @@ def main():
         'task_sha256': hashlib.sha256(task_text.encode('utf-8')).hexdigest(),
         'original_output_contract': output_contract,
         'materials': materials,
+        'manuscript_index_path': str(work_dir / 'manuscript-index.json') if manuscript_indexes else None,
+        'indexed_text_materials': len(manuscript_indexes),
     }
     state = {
         'case_id': case_id,

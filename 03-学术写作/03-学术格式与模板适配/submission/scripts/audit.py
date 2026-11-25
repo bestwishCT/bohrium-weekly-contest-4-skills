@@ -27,6 +27,20 @@ PATH_KEY = re.compile(
     r"png|editable|documents?|outputs?|source_maps?)(?:$|_)", re.I
 )
 FORMAT_RELATIONSHIPS = {"styles", "settings", "theme", "fontTable", "numbering", "webSettings"}
+PARAGRAPH_PROPERTIES = ("line_spacing_multiple", "line_rule", "alignment", "space_before_twips", "space_after_twips")
+LAYOUT_PROPERTIES = {
+    "page_width_in": ("pgSz", "w", 1440.0),
+    "page_height_in": ("pgSz", "h", 1440.0),
+    "margin_top_in": ("pgMar", "top", 1440.0),
+    "margin_right_in": ("pgMar", "right", 1440.0),
+    "margin_bottom_in": ("pgMar", "bottom", 1440.0),
+    "margin_left_in": ("pgMar", "left", 1440.0),
+    "header_in": ("pgMar", "header", 1440.0),
+    "footer_in": ("pgMar", "footer", 1440.0),
+    "gutter_in": ("pgMar", "gutter", 1440.0),
+    "column_spacing_in": ("cols", "space", 1440.0),
+    "columns": ("cols", "num", 1.0),
+}
 
 
 def q(ns, name):
@@ -305,12 +319,14 @@ class StyleModel:
         self.report = report
         self.styles = {}
         self.default_rpr = None
+        self.default_ppr = None
         self.default_paragraph = None
         self.theme = {"major": {}, "minor": {}}
         root = package.xml.get("word/styles.xml")
         if root is not None:
             defaults = root.find("w:docDefaults/w:rPrDefault/w:rPr", NS)
             self.default_rpr = defaults
+            self.default_ppr = root.find("w:docDefaults/w:pPrDefault/w:pPr", NS)
             for style in root.findall("w:style", NS):
                 style_id = style.get(q(W, "styleId"), "")
                 based = style.find("w:basedOn", NS)
@@ -375,6 +391,35 @@ class StyleModel:
                 return self.theme[kind].get("latin")
         return None
 
+    def _paragraph_value(self, ppr, prop):
+        if ppr is None:
+            return None
+        if prop == "alignment":
+            node = ppr.find("w:jc", NS)
+            return node.get(q(W, "val")) if node is not None else None
+        if prop in ("space_before_twips", "space_after_twips"):
+            node = ppr.find("w:spacing", NS)
+            attr = "before" if prop == "space_before_twips" else "after"
+            if node is None or node.get(q(W, attr)) is None:
+                return None
+            try:
+                return int(node.get(q(W, attr)))
+            except ValueError:
+                return None
+        node = ppr.find("w:spacing", NS)
+        if node is None:
+            return None
+        if prop == "line_rule":
+            return node.get(q(W, "lineRule"), "auto") if node.get(q(W, "line")) is not None else None
+        if prop == "line_spacing_multiple":
+            if node.get(q(W, "lineRule"), "auto") != "auto" or node.get(q(W, "line")) is None:
+                return None
+            try:
+                return int(node.get(q(W, "line"))) / 240.0
+            except ValueError:
+                return None
+        return None
+
     def style_value(self, style_id, prop):
         for _, style in self.chain(style_id):
             value = self._value(style["rPr"], prop)
@@ -383,6 +428,19 @@ class StyleModel:
         if self.chain_error:
             return None
         return self._value(self.default_rpr, prop)
+
+    def style_paragraph_value(self, style_id, prop):
+        for _, style in self.chain(style_id):
+            value = self._paragraph_value(style["pPr"], prop)
+            if value is not None:
+                return value
+        if self.chain_error:
+            return None
+        return self._paragraph_value(self.default_ppr, prop)
+
+    def effective_paragraph_value(self, paragraph, paragraph_style, prop):
+        value = self._paragraph_value(paragraph.find("w:pPr", NS), prop)
+        return value if value is not None else self.style_paragraph_value(paragraph_style or self.default_paragraph, prop)
 
     def effective_run_value(self, run, paragraph_style, prop):
         value = self._value(run.find("w:rPr", NS), prop)
@@ -432,14 +490,14 @@ def audit_styles(converted, case, data, base, report):
             report.need(False, "style_requirement_valid:" + str(style_id), "样式要求必须为对象")
             continue
         for prop, wanted in expected.items():
-            if prop not in ("font_size_pt", "font_family"):
+            if prop not in ("font_size_pt", "font_family") + PARAGRAPH_PROPERTIES:
                 continue
             for _ in model.chain(style_id):
                 pass
             if model.chain_error:
                 report.need(False, "style_unresolved:%s:%s" % (style_id, prop), "basedOn链不完整或循环；不猜默认值", pending=True, style=style_id, reason=model.chain_error)
                 continue
-            actual = model.style_value(style_id, prop)
+            actual = model.style_paragraph_value(style_id, prop) if prop in PARAGRAPH_PROPERTIES else model.style_value(style_id, prop)
             if actual is None:
                 report.need(False, "style_unresolved:%s:%s" % (style_id, prop), "无法从direct/basedOn/docDefaults/theme可靠解析；不猜默认值", pending=True, style=style_id)
                 continue
@@ -447,7 +505,9 @@ def audit_styles(converted, case, data, base, report):
             if prop == "font_family":
                 required_families.add(str(wanted))
 
-    # Check actual runs too: a correct style definition must not be bypassed by
+    # Check actual runs and paragraph direct formatting too: a correct style
+    # definition must not be bypassed in same-text converted content.
+    checked_paragraphs = set()
     # direct/character formatting in same-text converted content.
     for paragraph, run, style_id in model.runs():
         text = "".join((n.text or "") for n in run.iter() if n.tag in (q(W, "t"), q(M, "t")))
@@ -462,6 +522,17 @@ def audit_styles(converted, case, data, base, report):
                 report.need(False, "run_style_unresolved:%s" % prop, "实际文本运行继承值无法可靠解析", pending=True, text=text[:80])
             else:
                 report.need(actual == expected[prop], "run_style_value:%s" % prop, "实际文本运行未覆盖错误继承值", expected=expected[prop], actual=actual, text=text[:80])
+        marker = id(paragraph)
+        if marker not in checked_paragraphs:
+            checked_paragraphs.add(marker)
+            for prop in PARAGRAPH_PROPERTIES:
+                if prop not in expected:
+                    continue
+                actual = model.effective_paragraph_value(paragraph, style_id, prop)
+                if actual is None:
+                    report.need(False, "paragraph_style_unresolved:%s" % prop, "实际段落继承值无法可靠解析", pending=True, text=text[:80])
+                else:
+                    report.need(actual == expected[prop], "paragraph_style_value:%s" % prop, "实际段落direct格式未覆盖错误继承值", expected=expected[prop], actual=actual, text=text[:80])
 
     required_fonts = case.get("required_fonts", data.get("required_fonts", []))
     if not isinstance(required_fonts, list):
@@ -482,7 +553,41 @@ def audit_styles(converted, case, data, base, report):
         report.need(available, "font_resource:" + family, "随题字体资源真实可读，SFNT name表声明所需family", pending=True, path=str(path))
 
     audit_numbering(converted, model, case, data, report)
+    audit_layout(converted, case, data, report)
     return model
+
+
+def audit_layout(package, case, data, report):
+    requirements = data.get("layout_requirements", case.get("layout_requirements", {}))
+    if not isinstance(requirements, dict):
+        report.need(False, "layout_requirements_valid", "layout_requirements必须为对象")
+        return
+    if not requirements:
+        return
+    document = package.xml.get("word/document.xml")
+    sections = document.findall(".//w:sectPr", NS) if document is not None else []
+    report.need(bool(sections), "layout_sections_present", "要求页面/栏数检查时每节必须有可解析sectPr", pending=True)
+    for index, section in enumerate(sections):
+        for prop, wanted in requirements.items():
+            if prop not in LAYOUT_PROPERTIES:
+                report.need(False, "layout_requirement_supported:" + str(prop), "不支持的版式检查项")
+                continue
+            tag, attr, scale = LAYOUT_PROPERTIES[prop]
+            node = section.find("w:" + tag, NS)
+            raw = node.get(q(W, attr)) if node is not None else None
+            if raw is None and prop == "columns":
+                raw = "1"  # OOXML default is one column when w:cols/@w:num is absent.
+            try:
+                actual = float(raw) / scale if raw is not None else None
+                expected = float(wanted)
+            except (TypeError, ValueError):
+                actual = None
+                expected = wanted
+            if actual is None or not isinstance(wanted, (int, float)) or isinstance(wanted, bool):
+                report.need(False, "layout_unresolved:%d:%s" % (index, prop), "节属性缺失/非法或预期值非数值；不猜默认版式", pending=True, expected=wanted, actual=raw)
+            else:
+                tolerance = 0.01 if scale == 1440.0 else 0.0
+                report.need(abs(actual - expected) <= tolerance, "layout_value:%d:%s" % (index, prop), "实际节页面/边距/栏数符合模板", expected=expected, actual=actual)
 
 
 def audit_numbering(package, model, case, data, report):

@@ -43,7 +43,12 @@ description: "把原始生物机制材料转换为可追溯的实体—边—区
   SKILL=/skills/weekly-skill
   python3 "$SKILL/scripts/export.py" --input /app/output/pathway.svg --png /app/output/pathway.png --pdf /app/output/pathway.pdf --pdf-preview /app/output/pathway_pdf.png --report /app/output/export_report.json --width 1200 --height 760
   ```
-  报告记录真实发现顺序、命令、退出码、PNG 签名/像素、PDF 头/页数/media box 与逐文件 SHA-256；未发现的渲染器绝不声称执行，缺渲染器的输出写 `not_executed` 并保持 partial，不删除已成功格式。
+  报告记录真实发现顺序、命令、退出码、PNG 签名/像素、PDF 头/页数/media box 与逐文件 SHA-256；未发现的渲染器绝不声称执行，缺渲染器的输出写 `not_executed` 并保持 partial，不删除已成功格式。每次运行先清除本次同名旧导出，避免旧文件被误认作新渲染。`svg_to_pdf_renderer` 只表示由 SVG 渲染器生成 PDF，不额外保证 PDF 全为矢量；`png_wrapped_raster` 始终是位图封装。
+4. 模型必须另含真实 `case_id` 与从 case 原样取得的嵌套 `output_contract`。完成同一 SVG 的生成和导出后运行：
+   ```bash
+   python3 "$SKILL/scripts/write_result.py" --input /app/work/model.json --audit /app/output/mechanism_audit.json --export /app/output/export_report.json --svg /app/output/pathway.svg --png /app/output/pathway.png --pdf /app/output/pathway.pdf --output /app/output/result.json
+   ```
+   脚本只更新合同已有字段、递归保留未触及深层字段并校验 case_id、模型/SVG/PNG/PDF 哈希；不添加顶层字段。`unresolved`、审计 partial、缺文件或导出未通过均保持 partial，缺证据同时返回非零。结构完成不冒充视觉或科学审查通过。
 
 ## 三重质量门
 1. **机制语义**：把最终 SVG 反查至实体类型/同义名、边类型/方向、分支/反馈、区室和引文；检查跨膜位置和图例数据范围，杜绝逆因果和无来源节点。
@@ -55,7 +60,7 @@ description: "把原始生物机制材料转换为可追溯的实体—边—区
 - 图面过载先简化次要元素或扩展真实布局，不通过微小字号掩盖；字体/PNG/PDF 失败时保留 SVG 与已成功格式、错误日志和 partial/failed 状态。900 秒/64 请求内优先科学正确和可恢复源，不虚构成绩或工具能力。
 
 ## 最小非官方示例
-`examples/minimal.json` 包含 `synthetic://` 区室/定位与五类机制陈述，演示结合、分支激活、磷酸化和抑制反馈；图内明确 `SYNTHETIC DEMO — NOT OFFICIAL`。把命令输入替换为该文件，输出先到 `/app/work/example.svg` 和审计，再按契约真实导出；不是正式机制答案。
+`examples/minimal.json` 包含 `synthetic://` 区室/定位、真实 `case_id`/嵌套合同占位与五类机制陈述，演示结合、分支激活、跨区室转运、磷酸化和抑制反馈；图内明确 `SYNTHETIC DEMO — NOT OFFICIAL`。把命令输入替换为该文件，输出先到 `/app/work/example.svg` 和审计，再按契约真实导出；不是正式机制答案。
 
 ## 自查与维护
 - 保持合法 YAML、唯一 hyphen-case name、单行 description≤1024、正文<500 行；资源≤50 个 UTF-8 文本、单件≤500KB、合计≤2MB、无符号链接，验证产物不随技能提交。

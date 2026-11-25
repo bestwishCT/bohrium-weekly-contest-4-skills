@@ -22,6 +22,8 @@ description: "依据组织方基线摘要和审稿意见摘要拆解子要求，
 ## 真实运行入口与资源
 - 先完整读取 `/input/case.json` 与 `/input/task.md`，再读取 case 指向的全部实际材料；执行前也读取 `environment/resources.yaml`。以原始 `case_id`、章节范围、语言、格式和 `output_contract` 为唯一契约，Unknown 不猜测，未要求的附件不制造。
 - 平台把本技能安装到 `/skills/weekly-skill`。以技能根目录为基准使用 `scripts/audit.py` 和 `references/record-template.json`；例如 `python3 /skills/weekly-skill/scripts/audit.py /app/work/audit_input.json`。模板只是结构示意，不是答案。
+- 审计台账必须保留 `baseline_version/revised_version`，子要求含 `id/kind/severity/dependencies/action`；回复含 `decision/rationale/tone/implementation_status/evidence_status/evidence_sources/anchors`。`已修订`必须有定位，锚点含当前版本、章节、唯一改前/改文及回复可反查标签；未到位证据用对象清单记录所需证据、原因和替代处理。冲突记录关联至少两个真实子要求并说明兼容方案或待决策，不能静默漏答。
+- 交付审计在同一输入加入 `case_json=/input/case.json`、`result_json=/app/output/result.json`，默认输出根 `/app/output`。脚本对照原文件核验真实 `case_id`、深比较完整原 `output_contract`，拒绝额外字段、缺失required及嵌套type/enum/items错误，并检查契约中的产物路径真实可读且不逃逸。不要为通过审计改写合同；不支持的完整JSON Schema语义仍须人工核查。
 - `/app/work` 保存只读输入快照清单、抽取文本、稳定ID、分块状态、审计输入/输出与中间稿；`/app/output` 只保存契约要求的完整可编辑成品、指定预览和 `result.json`。制作目录是 `/app/submission`，不要污染输入。
 - `result.json` 必须原样保留 `case_id` 和实际 `output_contract` 的全部原始字段，把成品、来源、状态、不确定性、变更、缺口落到契约指定字段；不得把示意字段强加给 case。各状态枚举以契约为准。
 - 材料编目至少记录材料ID、真实路径、类型、版本线索、可读范围、缺失及定位方式；证据映射记录成品锚点、论断/对象、来源ID、精确位置、原文或数值、支持范围和处理动作。冲突双列，不静默择一。
@@ -33,7 +35,7 @@ description: "依据组织方基线摘要和审稿意见摘要拆解子要求，
 - 审计在 `/app/work` 生成独立审计输入，避免把测试数据混入正式输出；失败项回到具体源位置修复并重跑。禁止捏造实验、文献、DOI、人员、工具版本、分数、效率、白板或平台轨迹。
 
 ## 最小非官方示意与验收
-以下仅为虚构“示意”，不是官方案例：将一段含“12 samples, p=0.04, Fig. 1 [A]”的短材料写入 `/app/work/audit_input.json`，执行上述 `audit.py`。应得到机器可读检查项；示例文本不进入 `/app/output`。实际案例必须替换为真实材料并产出契约指定的完整结果。
+以下仅为虚构“示意”，不是官方案例：以 `synthetic-baseline-v1` 中“仅说明使用模型。”为基线，拆出 `R1.1` 方法子要求，实际改成“使用模型A”并在回复中引用当前版本锚点 `M1`；另将不可补做的实验标为“未到位”及原因。把台账写入 `/app/work/audit_input.json` 后执行上述 `audit.py`，应得到机器可读检查项；示例不进入 `/app/output`。实际案例必须替换为真实材料并产出契约指定的四类结果。
 - 自查：核对所有契约字段和任务动作、抽样重读源/成品双向映射、搜索空产物与占位语、运行脚本并处理失败、在全新相对路径下复跑。结果必须可继续编辑，审计表/建议不能替代合约要求的成品。
 - 维护：扩学科或格式时先加独立合成fixture，不改写旧断言掩盖错误；脚本只断言可机械验证项，语义判断仍由Agent逐条回读。来源为用户给定材料；无外部词表已捆绑。
 - 依赖：核心脚本仅 Python 3 标准库，开发机实测 CPython **3.9.6**；运行时重新执行 `python3 --version` 并如实记录。任何可选外部工具都先探测，未探测不声称可用。

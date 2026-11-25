@@ -9,7 +9,7 @@ description: Parse publisher and source-formula MathML into source-linked LaTeX 
 
 用于论文 MathML 结构转 LaTeX、符号表、公式来源核验和数值代入。C01/C03 必须读取 `artifacts/publisher-source.xml` 及派生 `artifacts/source-formulas.xml`，保留公式节点和来源 ID；目录不是用户要求证明的结论。C02 缺公式、预测或原始数据时只核对明确指标，返回 `partial/insufficient_evidence`，不反推公式或填 0。
 
-版本 `1.0.0`，Python 3.9+ 标准库 `ElementTree/ast`，Python 3.9.6 实测。已测分式、上下标、根式、定界符、矩阵和受限四则/幂表达式；不调用 SymPy，不承诺覆盖全部 Presentation MathML、LaTeX 渲染或科学单位自动量纲。未建模标签递归保留并发出 warning。
+版本 `1.1.0`，Python 3.9+ 标准库 `ElementTree/ast`，Python 3.9.6 实测。已测分式、上下标、根式、定界符、矩阵、常见 accents/limits（`mover/munder/munderover`）和受限四则/幂表达式；不调用 SymPy，不承诺覆盖全部 Presentation MathML、LaTeX 渲染、数学证明或科学单位自动量纲。未建模标签递归保留并发出 warning。
 
 ## 输入与合同
 
@@ -26,10 +26,10 @@ Agent 在 `/app/work/formula-analysis.json` 写（脚本无 `--candidate` 时读
 ## 专属流程
 
 1. 用 ElementTree 遍历命名空间无关 math 节点，携带最近公式来源 ID/label，保留原 MathML 序列化、位置和 SHA-256。
-2. 递归生成 LaTeX：`mfrac/msub/msup/msubsup/msqrt/mroot/mfenced/mtable` 及希腊字母；检查分式、脚本子节点数，不合并相邻变量。publisher 同 source ID 逐项交叉核对，缺 ID 明确报出。
+2. 递归生成 LaTeX：`mfrac/msub/msup/msubsup/msqrt/mroot/mfenced/mtable/mover/munder/munderover` 及希腊字母；检查分式、脚本及 accent/limit 子节点数，不合并相邻变量。读取与 `math` 同级的 `label` 作为公式编号。publisher 同 source ID 逐项按解析后的 MathML 标签、属性和文本结构交叉核对（不受缩进和命名空间前缀影响），缺 ID 或结构不同明确报出。
 3. 符号定义区分原文、上下文推断、常识补充和未报告；reported 定义 quote 必须存在，推断不得冒充实测。
-4. 数值代入前检查实际数值、表达式和单位。安全 AST 白名单求值，幂指数限幅；缺值返回 insufficient_evidence，绝不自动设零。
-5. 有 expected/tolerance 时报告实际差及是否在事前容差内，不能看到值后修改容差。数值计算通过不等于公式科学正确或单位一致。
+4. 数值代入前检查实际数值、表达式和单位。安全 AST 白名单求值，输入、字面值和结果须为有限实数，幂指数限幅；缺值返回 insufficient_evidence，绝不自动设零。
+5. expected 与 absolute_tolerance 必须成对提供，容差须为事先给定的有限非负数；报告实际差及是否在容差内，不能看到值后修改容差。数值计算通过不等于公式科学正确、推导成立或单位一致。最终递归核对真实合同的 `required/type/enum/items`；缺材料、字段缺失或枚举不符必须保留 `partial/insufficient_evidence`，不任取科学枚举值填空。
 6. C02 走缺失分支，记录哪些能做和不能做；C01/C03 检查 source/publisher 链、LaTeX warnings、变量证据和可复跑计算。
 
 ## 状态、输出和恢复

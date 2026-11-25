@@ -25,9 +25,9 @@ description: 在明确授权的数据源内执行专利号码规范定位、技�
 2. **号码规范化**：保留原号码，做大小写/标点和明确国家代码处理；`number_type` 始终区分 publication/application/grant/priority。号码查询缺 type 会报 ambiguous，绝不跨类型模糊匹配；优先权日、申请日、公开日和授权日各字段独立。
 3. **本地号码路径**：在实际授权记录中执行同类型规范化精确匹配，输出 matched number 和直接证据。无匹配仅限可用授权有限语料，不用相似号码补位；来源失败不是零命中。
 4. **本地主题路径**：`terms` 在授权 title/abstract/classification/claim 可检索字段中全部出现，且分类号条件（若给）存在交集才命中。科技论文单独按研究对象和方法匹配，绝不当同族或法律状态证据。
-5. **观察同族**：只用有来源定位的真实 family_links 建立无向连通观察集合，保留每条边的原始方向和优先级/链接类型。输出是 observed linked component，`exhaustive: false`；简单/扩展族口径不明就保留不明，不按关键词相似归族。
-6. **权利要求版本**：每个 version 独立保存正文、hash、来源/页、独立项与从属关系、OCR 标志和置信度。低/缺 OCR 置信度进入人工影印本复核；版本间即使文本接近也不推断保护范围等价，WO 合并 OCR 边界保留。
-7. **法律状态降级**：历史断言带状态、时点和来源单独保存；每个命中记录的当前状态固定为 `unknown_requires_live_official_verification`，因为本案没有当前官方核验。旧影印、网页、年费常识或申请人状态不能改变这一结论。
+5. **观察同族**：只用有来源定位的真实 family_links 建立无向连通观察集合，保留每条边的原始方向和优先级/链接类型。输出是 observed linked component，`exhaustive: false`；直接命中成员的同族记录也进入交付集合，并以 `retrieval_basis: observed_family_expansion` 区分于直接命中，不得把扩展成员伪装成查询命中。简单/扩展族口径不明就保留不明，不按关键词相似归族。
+6. **权利要求版本**：每个 version 独立逐字保存正文并对原文计算 hash，另存来源/页、独立项与从属关系、OCR 标志和置信度；匹配时才使用规范化副本，绝不改写原文证据。低/缺 OCR 置信度进入人工影印本复核；版本间即使文本接近也不推断保护范围等价，`merged_ocr`、`ocr_boundary` 与识别不确定字符原样保留。
+7. **法律状态降级**：历史断言带状态、时点和来源单独保存；同一时点出现不同状态时列入 `legal_status_conflicts`，并列原断言且不得静默消解。每个命中及观察同族记录的当前状态固定为 `unknown_requires_live_official_verification`，因为本案没有当前官方核验。旧影印、网页、年费常识或申请人状态不能改变这一结论。
 8. **证据风险**：号码直接命中、族观察、OCR/权利要求版本和法律未知分别标证据强度及缺口，稳定复跑，不发明实时变更追踪。
 
 核心结构：
@@ -47,9 +47,9 @@ description: 在明确授权的数据源内执行专利号码规范定位、技�
 
 ## 输出、证据和状态
 
-- `/app/output/result.json` 含真实 `case_id` 及实际合同全字段；内部为 `authorization_matrix/query_results/matched_patents/observed_families/scientific_literature/legal_status/claim_review_queue/risk_register`。
+- `/app/output/result.json` 含真实 `case_id` 及实际合同全字段；内部为 `authorization_matrix/query_results/matched_patents/observed_families/scientific_literature/legal_status/legal_status_conflicts/claim_review_queue/risk_register`。每个直接结果保留来源定位、匹配字段和筛选依据；同族扩展只覆盖观察链接成员。
 - `/app/work/analysis.json` 是完整字段与版本审计，`contract_validation.json` 保存合同警告，`run_log.json` 保存环境。受限字段不会因为这些审计文件而获得展示许可。
-- `completed_with_current_legal_status_unknown` 表示查询完成但法律状态仍未实时官方核验；`partial` 表示授权、号码类型、来源失败等缺口；`empty` 是未给查询。
+- 本案缺少当前官方实时法律状态证据，所以只要有查询，聚合状态一律为 `partial`；局部查询仍可标 `completed_local_snapshot` 或 `no_hit_in_available_authorized_corpus`。授权、号码类型、来源失败、历史状态冲突及 OCR 缺口均在 `status_detail` 单列；`empty` 仅表示未给查询。
 - 所有“族”仅为观察到的链接，所有 claim 仅为版本定位，所有科学比较仅为技术关联。不能外推全球同族、完整权利范围或最新技术覆盖。
 
 ## 依赖与降级
@@ -68,7 +68,7 @@ description: 在明确授权的数据源内执行专利号码规范定位、技�
 python3 /skills/weekly-skill/scripts/run.py --case /input/case.json --task /input/task.md --data /app/work/analysis_input.json --input-root /input --resources environment/resources.yaml
 ```
 
-若 `case_id: demo-patent` 且合同含常用五字段，示意节为 `{"case_id":"demo-patent","status":"completed_with_current_legal_status_unknown","results":[{"query_id":"q1","matches":[{"record_id":"P1"}]}]}`。号码和内容完全虚构，不是官方专利或登记状态。
+若 `case_id: demo-patent` 且合同含常用五字段，示意节为 `{"case_id":"demo-patent","status":"partial","results":[{"query_id":"q1","matches":[{"record_id":"P1"}]}]}`。号码和内容完全虚构，不是官方专利或登记状态；`partial` 也表示没有当前官方实时法律状态证据。
 
 ## 自查与维护
 

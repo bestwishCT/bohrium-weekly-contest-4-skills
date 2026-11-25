@@ -60,8 +60,26 @@ def latex(element, warnings):
             rows.append(" & ".join(latex(cell, warnings) for cell in row if local(cell) == "mtd"))
         return "\\begin{matrix}%s\\end{matrix}" % " \\\\ ".join(rows)
     if tag in {"mover", "munder", "munderover"}:
-        warnings.append("accent/limit tag retained by generic LaTeX grouping: " + tag)
-        return " ".join(latex(child, warnings) for child in children)
+        expected = {"mover": 2, "munder": 2, "munderover": 3}[tag]
+        if len(children) != expected:
+            warnings.append("invalid child count for " + tag)
+            return ""
+        base = latex(children[0], warnings)
+        if tag == "mover":
+            accents = {"¯": "overline", "‾": "overline",
+                       "ˉ": "bar", "˙": "dot", "¨": "ddot", "^": "hat",
+                       "ˆ": "hat", "˜": "tilde", "~": "tilde", "→": "vec",
+                       "⃗": "vec", "⏞": "overbrace"}
+            accent = (children[1].text or "").strip()
+            if local(children[1]) == "mo" and accent in accents:
+                return "\\%s{%s}" % (accents[accent], base)
+            return "\\overset{%s}{%s}" % (latex(children[1], warnings), base)
+        if tag == "munder":
+            if local(children[1]) == "mo" and (children[1].text or "").strip() == "⏟":
+                return "\\underbrace{%s}" % base
+            return "\\underset{%s}{%s}" % (latex(children[1], warnings), base)
+        return "\\underset{%s}{\\overset{%s}{%s}}" % (
+            latex(children[1], warnings), latex(children[2], warnings), base)
     if list(element):
         warnings.append("unmodeled MathML container preserved through recursive descent: " + tag)
         return text + " ".join(latex(child, warnings) for child in children)
@@ -74,8 +92,13 @@ def formula_records(root, origin):
     def walk(element, inherited_id=None, inherited_label=None):
         identifier = element.get("id", inherited_id)
         label = inherited_label
-        if local(element) == "label" and element.text:
-            label = element.text.strip()
+        sibling_label = next(
+            ((child.text or "").strip() for child in element
+             if local(child) == "label" and (child.text or "").strip()),
+            None,
+        )
+        if sibling_label is not None:
+            label = sibling_label
         if local(element) == "math":
             records.append((identifier or element.get("id"), label, element))
             return
@@ -94,6 +117,16 @@ def formula_records(root, origin):
     return result
 
 
+def mathml_structure(element):
+    """Compare parsed MathML, not namespace prefixes or pretty-print indentation."""
+    return (
+        local(element),
+        tuple(sorted(element.attrib.items())),
+        (element.text or "").strip(),
+        tuple(mathml_structure(child) for child in element),
+    )
+
+
 def safe_eval(expression, values):
     operations = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
                   ast.Div: operator.truediv, ast.Pow: operator.pow, ast.USub: operator.neg,
@@ -102,7 +135,9 @@ def safe_eval(expression, values):
     def evaluate(node):
         if isinstance(node, ast.Expression):
             return evaluate(node.body)
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            if not math.isfinite(node.value):
+                raise ValueError("numeric literals must be finite")
             return node.value
         if isinstance(node, ast.Name):
             if node.id not in values:
@@ -145,14 +180,26 @@ def main():
         for item in candidate.get("evaluations", []):
             record = dict(item)
             try:
-                values = {key: float(value) for key, value in item.get("inputs", {}).items()}
+                if not isinstance(item.get("inputs"), dict):
+                    raise ValueError("inputs must be an object of supplied variable names and numbers")
+                values = {key: float(value) for key, value in item["inputs"].items()}
                 if not values:
                     raise ValueError("no actual numeric values supplied; unknown values were not set to zero")
+                if any(not math.isfinite(value) for value in values.values()):
+                    raise ValueError("numeric inputs must be finite")
                 record["computed"] = safe_eval(item["expression"], values)
+                if isinstance(record["computed"], bool) or not isinstance(record["computed"], (int, float)) or not math.isfinite(record["computed"]):
+                    raise ValueError("computed result must be a finite real number")
                 record["numeric_status"] = "computed_from_supplied_values"
-                if "expected" in item and "absolute_tolerance" in item:
-                    record["absolute_difference"] = abs(record["computed"] - float(item["expected"]))
-                    record["within_predeclared_tolerance"] = record["absolute_difference"] <= float(item["absolute_tolerance"])
+                if ("expected" in item) != ("absolute_tolerance" in item):
+                    raise ValueError("expected and absolute_tolerance must be supplied together")
+                if "expected" in item:
+                    expected = float(item["expected"])
+                    tolerance = float(item["absolute_tolerance"])
+                    if not math.isfinite(expected) or not math.isfinite(tolerance) or tolerance < 0:
+                        raise ValueError("expected must be finite and absolute_tolerance must be finite and nonnegative")
+                    record["absolute_difference"] = abs(record["computed"] - expected)
+                    record["within_predeclared_tolerance"] = record["absolute_difference"] <= tolerance
             except Exception as error:
                 record["numeric_status"] = "insufficient_evidence"
                 record["reason"] = str(error)
@@ -176,7 +223,7 @@ def main():
             match = publisher_by_id.get(formula["source_id"])
             if match is None:
                 missing_on_publisher.append(formula["formula_id"])
-            elif match["mathml"] != formula["mathml"]:
+            elif mathml_structure(ET.fromstring(match["mathml"])) != mathml_structure(ET.fromstring(formula["mathml"])):
                 missing_on_publisher.append(formula["formula_id"] + " (same ID but different MathML structure)")
             else:
                 formula["publisher_crosscheck"] = "same_source_id_and_mathml_structure"

@@ -1,20 +1,74 @@
 {
   "synthetic_template": true,
-  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "note": "非官方内部审计结构示意，不是case output_contract，不进入公开result。缺失证据留空并标partial，不编造文献或实验。",
   "record": {
     "literature": [
       {
-        "id": "",
-        "author": "",
-        "year": "",
-        "venue": ""
+        "id": "稳定文献ID",
+        "author": "真实作者",
+        "year": "真实年份",
+        "venue": "真实来源",
+        "problem": "原文问题设定",
+        "route": "方法或技术路线",
+        "data_evaluation": "真实数据与评价；不足留空",
+        "conclusion": "可读证据支持的结论",
+        "conditions": "适用条件；不足留空",
+        "limitation": "有定位的真实局限",
+        "locator": "文件+页码/段落/表图",
+        "access_level": "full_text | abstract | metadata_only"
       }
     ],
-    "groups": [],
-    "gaps": [],
-    "paper_evidence": [],
-    "contributions": [],
-    "claims": [],
-    "manuscript": ""
+    "groups": [
+      {
+        "route": "路线名",
+        "axis": "problem | method | technical_route",
+        "dimensions": ["problem", "method", "data_evaluation"],
+        "members": ["稳定文献ID"],
+        "comparison": "同一维度上的取舍与组际差异"
+      }
+    ],
+    "gaps": [
+      {
+        "id": "G1",
+        "limitations_from": ["稳定文献ID"],
+        "limitation_locators": {"稳定文献ID": "局限原文位置"},
+        "statement": "进入空白正文的推导结果",
+        "response_anchor": "paper:真实锚点",
+        "response_status": "fully_addressed | partially_addressed | unverified",
+        "response_statement": "本文实际回应及边界，进入正文"
+      }
+    ],
+    "paper_evidence": ["paper:真实锚点"],
+    "paper_evidence_records": {
+      "paper:真实锚点": {
+        "locator": "真实文件+方法/图表/结果位置",
+        "excerpt": "支持贡献的原文或实际数值"
+      }
+    },
+    "contributions": [
+      {
+        "id": "C1",
+        "evidence_anchor": "paper:真实锚点",
+        "statement": "与真实证据一致的贡献正文"
+      }
+    ],
+    "claims": [
+      {
+        "id": "K1",
+        "section": "background | related_work | gap | contributions",
+        "sentence": "成稿中的具体论断原句",
+        "citation_text": "成稿中实际引用标记",
+        "source_ids": ["稳定文献ID"],
+        "source_locators": {"稳定文献ID": "支持该论断的原文位置"},
+        "relation": "各来源如何支持此论断"
+      }
+    ],
+    "sections": {
+      "background": "研究背景完整正文",
+      "related_work": "按路线比较的相关工作完整正文",
+      "gap": "空白推导与本文回应完整正文",
+      "contributions": "贡献完整正文"
+    },
+    "manuscript": "按case顺序连接上述四部分的完整可编辑成稿"
   }
 }

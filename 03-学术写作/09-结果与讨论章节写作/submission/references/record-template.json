@@ -1,19 +1,79 @@
 {
   "synthetic_template": true,
-  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "note": "非官方内部审计结构示意，不是case output_contract，不进入公开result。缺图、缺统计、单位不明和模糊读图均保留partial，不插值猜图。",
   "record": {
     "panels": [
       {
-        "id": "",
-        "value": "",
-        "unit": ""
+        "id": "真实稳定面板ID",
+        "source_kind": "data_table | plot | caption",
+        "locator": "真实文件+图/表+面板+坐标/图注位置",
+        "value": "材料明确值；纯图估读不得冒称精确真值",
+        "unit": "材料真实单位"
       }
     ],
-    "readings": [],
-    "findings": [],
-    "results": "",
-    "discussion_claims": [],
-    "discussion": "",
-    "design": ""
+    "readings": [
+      {
+        "id": "R1",
+        "panel_id": "真实稳定面板ID",
+        "value": "读取值",
+        "unit": "真实单位",
+        "label": "正文实际数值写法；估读含约/估计",
+        "precision": "exact | estimated",
+        "uncertainty": "估读不确定性；精确读数留空",
+        "locator": "精确读数或估读依据位置"
+      }
+    ],
+    "statistics": [
+      {
+        "id": "S1",
+        "comparison": "实际组别与条件比较",
+        "p_value": "实际P值或原文阈值写法",
+        "alpha": "材料给出的阈值",
+        "significant": "材料实际显著性布尔值",
+        "locator": "真实统计输出位置"
+      }
+    ],
+    "findings": [
+      {
+        "id": "N1",
+        "kind": "primary | secondary | negative | inconsistent",
+        "reading_ids": ["R1"],
+        "statistic_id": "S1；未声称显著性时省略",
+        "significant": "实际显著性；未知用null",
+        "sentence": "进入结果段的观察事实"
+      }
+    ],
+    "results": "# 结果\n按case顺序组织的完整观察正文",
+    "literature": [
+      {
+        "id": "L1",
+        "author": "真实作者",
+        "year": "真实年份",
+        "venue": "真实来源",
+        "relation": "consistent | inconsistent | context",
+        "locator": "真实文件+页码/段落"
+      }
+    ],
+    "discussion_claims": [
+      {
+        "id": "D1",
+        "sentence": "进入讨论段的解释或对照论断",
+        "finding_id": "N1；纯文献论断省略",
+        "literature_id": "L1；纯本研究论断省略",
+        "literature_locator": "与文献台账一致的位置",
+        "kind": "interpretation | mechanism | comparison",
+        "relation": "一致/不一致及可能原因"
+      }
+    ],
+    "limitations": [
+      {
+        "id": "Z1",
+        "dimension": "method | sample | measurement | statistics",
+        "impact": "对结论适用范围的实质影响",
+        "statement": "进入讨论段的具体局限正文"
+      }
+    ],
+    "discussion": "# 讨论\n解释、本研究/文献对照和局限的完整正文",
+    "design": "observational | randomized_controlled | controlled_experiment | other"
   }
 }

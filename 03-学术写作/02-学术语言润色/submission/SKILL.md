@@ -1,6 +1,6 @@
 ---
 name: preserve-academic-meaning
-description: "对纯文本、Markdown或LaTeX学术片段逐句做最小编辑、语法语法定稿、术语统一和目标文体适配；保护数字、限定、否定、因果与引用，并交付完整润色稿及逐句理由。"
+description: "对纯文本、Markdown或LaTeX学术片段逐句做最小编辑、语法定稿、术语统一和目标文体适配；保护数字、限定、否定、因果与引用，并交付完整润色稿及逐句理由。"
 ---
 
 # 语义守恒最小学术润色
@@ -21,6 +21,8 @@ description: "对纯文本、Markdown或LaTeX学术片段逐句做最小编辑�
 ## 真实运行入口与资源
 - 先完整读取 `/input/case.json` 与 `/input/task.md`，再读取 case 指向的全部实际材料；执行前也读取 `environment/resources.yaml`。以原始 `case_id`、章节范围、语言、格式和 `output_contract` 为唯一契约，Unknown 不猜测，未要求的附件不制造。
 - 平台把本技能安装到 `/skills/weekly-skill`。以技能根目录为基准使用 `scripts/audit.py` 和 `references/record-template.json`；例如 `python3 /skills/weekly-skill/scripts/audit.py /app/work/audit_input.json`。模板只是结构示意，不是答案。
+- 审计输入除 `original/polished/protected_tokens/semantic_tokens/edits` 外，加入 `terminology`（`concept/preferred/forbidden`，需要时加 `expansion/abbreviation`）。脚本自动重提数字、引用、图表指向、数学式、LaTeX命令、代码和链接，按多重集比较；逐条编辑必须能把原稿精确重建为润色稿，防止漏记额外改动。限定/否定的机器检查只验证完整词计数，范围与因果仍须逐句人工回读，不能以脚本通过代替语义判断。
+- 交付审计在同一输入加入 `case_json=/input/case.json`、`result_json=/app/output/result.json`，默认输出根 `/app/output`。脚本对照原文件核验真实 `case_id`、深比较完整原 `output_contract`，拒绝额外字段、缺失required及嵌套type/enum/items错误，并检查契约中的产物路径真实可读且不逃逸。不要为通过审计改写合同；不支持的完整JSON Schema语义仍须人工核查。
 - `/app/work` 保存只读输入快照清单、抽取文本、稳定ID、分块状态、审计输入/输出与中间稿；`/app/output` 只保存契约要求的完整可编辑成品、指定预览和 `result.json`。制作目录是 `/app/submission`，不要污染输入。
 - `result.json` 必须原样保留 `case_id` 和实际 `output_contract` 的全部原始字段，把成品、来源、状态、不确定性、变更、缺口落到契约指定字段；不得把示意字段强加给 case。各状态枚举以契约为准。
 - 材料编目至少记录材料ID、真实路径、类型、版本线索、可读范围、缺失及定位方式；证据映射记录成品锚点、论断/对象、来源ID、精确位置、原文或数值、支持范围和处理动作。冲突双列，不静默择一。

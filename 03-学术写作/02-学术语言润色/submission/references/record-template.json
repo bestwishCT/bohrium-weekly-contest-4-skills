@@ -1,11 +1,20 @@
 {
   "synthetic_template": true,
-  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。",
+  "note": "非官方结构示意；字段供审计输入使用，不是case output_contract。交付审计另加case_json、result_json和output_dir，并深拷贝case_id与原output_contract供一致性复核。",
   "record": {
     "original": "",
     "polished": "",
     "protected_tokens": [],
     "semantic_tokens": [],
+    "terminology": [
+      {
+        "concept": "",
+        "preferred": "",
+        "forbidden": [],
+        "expansion": "",
+        "abbreviation": ""
+      }
+    ],
     "edits": [
       {
         "sentence_id": "",

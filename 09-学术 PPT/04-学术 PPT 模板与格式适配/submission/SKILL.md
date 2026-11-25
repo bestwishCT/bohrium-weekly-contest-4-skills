@@ -18,7 +18,7 @@ description: Adapt real academic content to an actual PPTX master/layout system 
 ## 先探查真实模板，不凭截图猜继承
 
 1. 以 PPTX 包和 python-pptx 读取 slide size、slideMasters、theme、layouts、每页 layout 关系、占位符 type/idx/几何、主题字体/色和实际页脚/页码。`adapt_template.py` 生成 `template_probe.json`，记录源/目标 SHA-256、主题字体、master part、每个 layout part 和槽位边界。
-2. 以 case 内容确定封面、章节/过渡、方法、结果、结论等页型，选择实际存在的 layout 名；标题填 idx=0，正文 idx=1，原生图表默认需要真实 idx=2。没有图表槽时选择其他真实双内容 layout 或按明确授权采用原生对象，不能覆盖页脚，不私改母版。
+2. 以 case 内容确定封面、章节/过渡、方法、结果、结论等页型，选择实际存在的 layout 名；标题填 idx=0，正文 idx=1，原生图表默认需要真实 idx=2。没有图表槽时选择其他真实双内容 layout 或按明确授权采用原生对象，不能覆盖页脚，不私改母版。正文槽缺失且本页有计划要点时脚本直接拒绝，不能静默丢内容；页序 `slide` 与每页非负 `seconds` 也逐页核验。
 3. 从模板实际字号/版心/字体策略建立 `style_rules`：`title_font_pt`、`body_font_pt`、`min_font_pt`，及任务授权的 color/spacing。示例的 30/20/18 仅为合成 fixture，不是正式规则。先缩句、换行、减层级、换真实 layout，再在规则允许范围小调；不把全文缩成不可读字。
 4. 探查实际字体（Linux `fc-list`，macOS `system_profiler SPFontsDataType -json`，或 case 明示工具），记录 family、字体文件/version 与可用性。缺字体或探测不可用默认阻塞，不声称回退后无影响；嵌入字体只在实际导出/结构核验可证时记录，本脚本不声称嵌入。
 5. 内容—证据页映射：每页保留 claim、原始 PDF 页/精确 quote、图号与数值单位；版式任务不得顺手放大结论。`notes.transition/emphasis/backup` 写讲述过渡、证据强调和额外来源/排版降级信息，不重复页面，不编造科学内容。
@@ -41,7 +41,7 @@ description: Adapt real academic content to an actual PPTX master/layout system 
 
 ## 批量适配与整册审计
 
-对每页依次填真实槽位、写原生备注，应用可读字号阶梯并关闭自动无限缩字。图像按容器等比 fit，默认零裁切；若有实际授权裁切必须记录区域且目检轴、图例、单位和图注全部保留。原生图表只接受具有真实 categories/series 的 PowerPoint chart + 内嵌 workbook，不从位图猜数；轴标题/图例/单位保持源含义。也接受按物理 PDF 页裁出的实际源图（`kind: figure` + `source_pdf_page` + PDF 点坐标 `source_pdf_crop`），脚本从当前 PDF 重裁并核对声明 PNG 的 SHA-256，且要求同页同 Figure 引用，以容器等比放置且零裁切；不能使用不在工作区内的匿名图片。每页 `sources` 必须非空并含精确引文。可用顶层 `source_sha256` / `template_sha256` 绑定已审版本；未提供外部预期哈希时仅证明本次构建使用同一源文件，不声称验证官方源。`source_pdf_ledger.json` 覆盖每个物理页并单列空文本/OCR 待读页；没有实际 OCR 不得把扫描页当作已读证据。
+对每页依次填真实槽位、写原生备注，应用可读字号阶梯并关闭自动无限缩字。原生图表的默认文字与坐标轴刻度也服从 `min_font_pt`，不再使用独立的 12pt 硬编码。图像按容器等比 fit，默认零裁切；若有实际授权裁切必须记录区域且目检轴、图例、单位和图注全部保留。原生图表只接受具有真实 categories/series 的 PowerPoint chart + 内嵌 workbook，不从位图猜数；轴标题/图例/单位保持源含义。也接受按物理 PDF 页裁出的实际源图（`kind: figure` + `source_pdf_page` + PDF 点坐标 `source_pdf_crop`），脚本从当前 PDF 重裁并核对声明 PNG 的 SHA-256，且要求同页同 Figure 引用，以容器等比放置且零裁切；不能使用不在工作区内的匿名图片。每页 `sources` 必须非空并含精确引文。可用顶层 `source_sha256` / `template_sha256` 绑定已审版本；未提供外部预期哈希时仅证明本次构建使用同一源文件，不声称验证官方源。`source_pdf_ledger.json` 覆盖每个物理页并单列空文本/OCR 待读页；没有实际 OCR 不得把扫描页当作已读证据。
 
 `page_deviations.json` 必须覆盖**每一页**并报告：
 

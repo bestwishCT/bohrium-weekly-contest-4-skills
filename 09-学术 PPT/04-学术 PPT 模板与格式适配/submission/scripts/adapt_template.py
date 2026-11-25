@@ -300,7 +300,7 @@ def audit_presentation(path, pages, style):
     return rows, issues
 
 
-def fill_chart(slide, visual):
+def fill_chart(slide, visual, style):
     destination = ph(slide, 2)
     if destination is None:
         raise ValueError("no actual chart placeholder idx=2; do not improvise over footer/master")
@@ -314,6 +314,7 @@ def fill_chart(slide, visual):
     box = destination.left, destination.top, destination.width, destination.height
     destination._element.getparent().remove(destination._element)
     chart = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, *box, data).chart
+    chart.font.size = Pt(style_safe(style["body_font_pt"], style["min_font_pt"]))
     chart.has_title = bool(visual.get("figure"))
     if chart.has_title:
         chart.chart_title.text_frame.text = visual["figure"]
@@ -322,7 +323,7 @@ def fill_chart(slide, visual):
         axis.has_title = bool(visual.get(key))
         if axis.has_title:
             axis.axis_title.text_frame.text = visual[key]
-        axis.tick_labels.font.size = Pt(style_safe(12, 11))
+        axis.tick_labels.font.size = Pt(style_safe(style["min_font_pt"], style["min_font_pt"]))
 
 
 def style_safe(value, minimum):
@@ -380,6 +381,8 @@ def adapt(spec_path, outdir, work):
     required = ("case_id", "source_material", "template", "starting_deck", "original_sha256", "mode", "audience", "time_minutes", "slide_count", "pages", "required_fonts", "style_rules", "output_contract")
     if any(k not in spec for k in required):
         raise ValueError("template adaptation spec lacks case-derived fields")
+    if not isinstance(spec["output_contract"], dict) or spec["output_contract"].get("case_id") != spec["case_id"]:
+        raise ValueError("output_contract must be an object whose case_id equals the actual case_id")
     source, template, start = [(root / spec[k]).resolve() for k in ("source_material", "template", "starting_deck")]
     if not all(p.is_file() for p in (source, template, start)):
         raise FileNotFoundError("actual source, editable template and starting deck are required")
@@ -440,6 +443,14 @@ def adapt(spec_path, outdir, work):
     dump(outdir / "template_probe.json", template_probe)
     figure_evidence, chart_evidence = [], []
     for number, page in enumerate(spec["pages"], 1):
+        if page.get("slide") != number or not isinstance(page.get("claim"), str) or not page["claim"].strip():
+            raise ValueError(f"slide {number}: page order and a nonempty claim are required")
+        points = page.get("points", [])
+        if not isinstance(points, list) or not all(isinstance(point, str) and point.strip() for point in points):
+            raise ValueError(f"slide {number}: points must be nonempty source-reviewed strings")
+        seconds = page.get("seconds")
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds < 0:
+            raise ValueError(f"slide {number}: seconds must be a finite nonnegative case-planned duration")
         if not isinstance(page.get("sources"), list) or not page["sources"]:
             raise ValueError(f"slide {number}: at least one exact PDF source citation is required")
         for src in page["sources"]:
@@ -458,8 +469,10 @@ def adapt(spec_path, outdir, work):
         for para in title.text_frame.paragraphs:
             for run in para.runs:
                 run.font.size = Pt(style["title_font_pt"])
+        if body is None and points:
+            raise ValueError(f"slide {number}: body slot idx=1 is unavailable; refusing to silently drop planned content")
         if body is not None:
-            body.text = "\n".join(page.get("points", []))
+            body.text = "\n".join(points)
             body.text_frame.word_wrap = True
             body.text_frame.auto_size = MSO_AUTO_SIZE.NONE
             for para in body.text_frame.paragraphs:
@@ -469,7 +482,7 @@ def adapt(spec_path, outdir, work):
             if page["visual"].get("kind") == "chart":
                 records = validate_chart(source, page["visual"], page["sources"], f"slide {number}")
                 chart_evidence.append({"slide": number, "records": records})
-                fill_chart(slide, page["visual"])
+                fill_chart(slide, page["visual"], style)
             elif page["visual"].get("kind") == "figure" and isinstance(page["visual"].get("source_pdf_page"), int):
                 if not any(src.get("pdf_page") == page["visual"]["source_pdf_page"] and src.get("figure") == page["visual"].get("figure") for src in page["sources"]):
                     raise ValueError(f"slide {number}: source figure must match a cited figure on the same physical PDF page")

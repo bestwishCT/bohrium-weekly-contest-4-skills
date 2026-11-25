@@ -223,6 +223,13 @@ def main():
         return 2
     expected_w = args.width or svg_w
     expected_h = args.height or svg_h
+    requested_outputs = [Path(value) for value in (args.png, args.pdf, args.pdf_preview) if value]
+    if any(path.resolve() == svg.resolve() for path in requested_outputs):
+        print(json.dumps({"status": "input_error", "error": "an export path would overwrite the source SVG"}))
+        return 2
+    for path in requested_outputs:
+        if path.exists():
+            path.unlink()
     report = {
         "status": "failed",
         "source_file": svg.name,
@@ -314,7 +321,7 @@ def main():
             report["commands"].extend(attempts)
             if chosen:
                 info = pdf_info(pdf_path)
-                report["pdf"] = {"status": "rendered_and_verified", "method": "vector_renderer",
+                report["pdf"] = {"status": "rendered_and_verified", "method": "svg_to_pdf_renderer",
                                  "renderer": chosen["name"], "path": str(pdf_path),
                                  "pdf_page_count": info["page_count"], "pdf_media_box_points": info["media_box_points"],
                                  "sha256": hashlib.sha256(pdf_path.read_bytes()).hexdigest()}

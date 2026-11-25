@@ -53,12 +53,27 @@ def process(case, data, task, inv):
         claims = []
         if "claims" in allowed:
             for c_index, claim in enumerate(record.get("claims", [])):
-                text = norm_text(claim.get("text", ""))
+                raw_text = claim.get("text", "")
+                text = raw_text if isinstance(raw_text, str) else ""
                 ocr_confidence = claim.get("ocr_confidence")
-                low_ocr = claim.get("ocr", False) and (not isinstance(ocr_confidence, (int, float)) or ocr_confidence < data.get("ocr_review_threshold", 0.8))
-                claims.append({"claim_version_id": claim.get("version_id", "version%02d" % (c_index + 1)), "source": claim.get("source", source_name), "source_locator": claim.get("source_locator", ""), "page": claim.get("page"), "text": text, "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None, "independent": claim.get("independent"), "depends_on": claim.get("depends_on"), "ocr": claim.get("ocr", False), "ocr_confidence": ocr_confidence, "ocr_review_required": low_ocr, "scope_comparison": "version text hash only; equal/different protection scope is not inferred"})
+                low_ocr = claim.get("ocr", False) and (not isinstance(ocr_confidence, (int, float)) or isinstance(ocr_confidence, bool) or ocr_confidence < data.get("ocr_review_threshold", 0.8))
+                claims.append({"claim_version_id": claim.get("version_id", "version%02d" % (c_index + 1)), "source": claim.get("source", source_name), "source_locator": claim.get("source_locator", ""), "page": claim.get("page"), "text": text, "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None, "independent": claim.get("independent"), "depends_on": claim.get("depends_on"), "ocr": claim.get("ocr", False), "ocr_confidence": ocr_confidence, "ocr_review_required": low_ocr, "merged_ocr": claim.get("merged_ocr"), "ocr_boundary": claim.get("ocr_boundary"), "recognition_uncertainties": claim.get("recognition_uncertainties", []), "scope_comparison": "verbatim version text hash only; equal/different protection scope is not inferred"})
         legal_history = record.get("legal_history", []) if "legal_history" in allowed else []
-        allowed_records[rid] = {"record_id": rid, "source": source_name, "authorization": level, "source_version": source.get("version"), "material_date": source.get("material_date"), "query_date": source.get("query_date"), "numbers": numbers if "numbers" in allowed else [], "fields": fields, "claims": claims, "legal_history_as_recorded": legal_history, "current_official_legal_status": "unknown_requires_live_official_verification", "redacted_fields": sorted(set(PUBLIC_FIELDS + ["claims", "legal_history", "numbers"]) - allowed)}
+        source_locator_allowed = level == "green" or "source_locator" in allowed
+        allowed_records[rid] = {"record_id": rid, "source": source_name, "source_locator": record.get("source_locator") if source_locator_allowed else None, "authorization": level, "source_version": source.get("version"), "material_date": source.get("material_date"), "query_date": source.get("query_date"), "numbers": numbers if "numbers" in allowed else [], "fields": fields, "claims": claims, "legal_history_as_recorded": legal_history, "current_official_legal_status": "unknown_requires_live_official_verification", "redacted_fields": sorted((set(PUBLIC_FIELDS + ["claims", "legal_history", "numbers"]) - allowed) | (set() if source_locator_allowed else {"source_locator"}))}
+
+    legal_status_conflicts = []
+    for rid, record in allowed_records.items():
+        assertions_at_date = {}
+        for assertion in record["legal_history_as_recorded"]:
+            if not isinstance(assertion, dict):
+                continue
+            as_of = norm_text(assertion.get("as_of", ""))
+            assertions_at_date.setdefault(as_of, []).append(assertion)
+        for as_of, assertions in assertions_at_date.items():
+            statuses = sorted({norm_text(item.get("status", "")) for item in assertions if norm_text(item.get("status", ""))})
+            if len(statuses) > 1:
+                legal_status_conflicts.append({"record_id": rid, "as_of": as_of or None, "statuses": statuses, "historical_assertions": assertions, "resolution": "unresolved_source_conflict_retained"})
 
     scientific = []
     scientific_exclusions = []
@@ -99,6 +114,9 @@ def process(case, data, task, inv):
     for q_index, query in enumerate(queries):
         qid = norm_text(query.get("id", "query%03d" % (q_index + 1)))
         qtype = query.get("query_type", "number" if query.get("raw_number") else "topic")
+        if qtype not in {"number", "topic"}:
+            query_results.append({"query_id": qid, "query_type": qtype, "status": "unsupported_query_type", "matches": [], "scientific_matches": [], "effect": "only explicit number or topic queries are processed; no topic fallback for unknown types"})
+            continue
         source_name = norm_text(query.get("source", ""))
         source = source_by_name.get(source_name, {})
         if not source_name or source_name not in source_by_name or source.get("authorization", "red") not in {"green", "yellow"}:
@@ -120,7 +138,7 @@ def process(case, data, task, inv):
             for rid, record in scoped_records.items():
                 for number in record["numbers"]:
                     if number["number_type"] == number_type and compact_number(number["raw"]) == target:
-                        matches.append({"record_id": rid, "matched_number": number, "evidence_strength": "direct_typed_number_match"})
+                        matches.append({"record_id": rid, "source": source_name, "source_locator": record["source_locator"], "matched_number": number, "selection_basis": "exact match of the declared number type after case/punctuation normalization", "evidence_strength": "direct_typed_number_match"})
             result_scope = "typed exact match in the query's registered authorized source; no similar-number padding"
         else:
             terms = [norm_text(x).casefold() for x in query.get("terms", []) if norm_text(x)]
@@ -136,7 +154,14 @@ def process(case, data, task, inv):
                 applicants = applicants if isinstance(applicants, list) else [applicants]
                 actual_applicants = [norm_text(x).casefold() for x in applicants]
                 if all(term in corpus for term in terms) and (not classifications or classifications & actual_classes) and (not applicant or any(applicant in value for value in actual_applicants)):
-                    matches.append({"record_id": rid, "matched_terms": terms, "matched_classifications": sorted(classifications & actual_classes), "evidence_strength": "declared_local_topic_field_match"})
+                    matched_fields = sorted(field for field, value in record["fields"].items() if any(term in norm_text(str(value)).casefold() for term in terms))
+                    if any(term in norm_text(" ".join(c["text"] for c in record["claims"])).casefold() for term in terms):
+                        matched_fields.append("claims")
+                    if classifications & actual_classes:
+                        matched_fields.append("classifications")
+                    if applicant and any(applicant in value for value in actual_applicants):
+                        matched_fields.append("applicants")
+                    matches.append({"record_id": rid, "source": source_name, "source_locator": record["source_locator"], "matched_terms": terms, "matched_classifications": sorted(classifications & actual_classes), "matched_fields": sorted(set(matched_fields)), "selection_basis": "all requested terms occur in authorized searchable fields; requested classification and applicant filters also match", "evidence_strength": "declared_local_topic_field_match"})
             if terms:
                 for paper in scientific:
                     if paper["source"] != source_name:
@@ -156,24 +181,34 @@ def process(case, data, task, inv):
                             seen.add(neighbor)
                             queue.append(neighbor)
                 families.append({"seed_record_id": rid, "observed_member_ids": sorted(seen), "evidence_links": [e for e in links if e["from"] in seen and e["to"] in seen], "family_scope": "observed_linked_component_only", "exhaustive": False, "equivalent_claim_scope_claimed": False})
-            for claim in allowed_records[rid]["claims"]:
-                if claim["ocr_review_required"]:
-                    claim_review.append({"record_id": rid, "claim_version_id": claim["claim_version_id"], "source_locator": claim["source_locator"], "issue": "low or missing OCR confidence; original image/page review required"})
-    matched_ids = sorted({m["record_id"] for q in query_results for m in q["matches"]})
+    direct_match_ids = {m["record_id"] for q in query_results for m in q["matches"]}
+    matched_ids = sorted(direct_match_ids | {rid for family in families for rid in family["observed_member_ids"]})
+    for rid in matched_ids:
+        for claim in allowed_records[rid]["claims"]:
+            issues = []
+            if claim["ocr_review_required"]:
+                issues.append("low or missing OCR confidence; original image/page review required")
+            if claim["merged_ocr"] or claim["ocr_boundary"]:
+                issues.append("merged/OCR source boundary retained; do not infer another version or equivalent scope")
+            if issues:
+                claim_review.append({"record_id": rid, "claim_version_id": claim["claim_version_id"], "source": claim["source"], "source_locator": claim["source_locator"], "page": claim["page"], "issues": issues, "ocr_boundary": claim["ocr_boundary"], "recognition_uncertainties": claim["recognition_uncertainties"]})
     incomplete_queries = [q for q in query_results if q["status"] not in FINISHED_QUERY_STATUSES]
-    status = "empty" if not queries else "partial" if excluded or scientific_exclusions or excluded_family_links or incomplete_queries else "completed_with_current_legal_status_unknown"
+    # This finite corpus has no live official legal-status evidence, so even a
+    # completed local query is only an honest partial answer to the full task.
+    status = "empty" if not queries else "partial"
     return {
-        "status": status, "status_detail": {"completed": ["authorization matrix"] + ([] if incomplete_queries else ["typed number/topic search"]) + ["observed family and claim-version audit"], "incomplete": ["current official legal status remains unverified", "red/yellow restricted scopes"] + (["queries incomplete: " + ", ".join(q["query_id"] + "=" + q["status"] for q in incomplete_queries)] if incomplete_queries else []) + (["undeclared or unauthorized scientific literature excluded"] if scientific_exclusions else []) + (["unauthorized or under-scoped family links excluded"] if excluded_family_links else []) + (["OCR/manual facsimile review"] if claim_review else [])},
+        "status": status, "status_detail": {"completed": ["authorization matrix"] + ([] if incomplete_queries else ["typed number/topic search"]) + ["observed family expansion and claim-version audit"], "incomplete": ["current official legal status remains unverified; aggregate result is partial without live official evidence", "red/yellow restricted scopes"] + (["queries incomplete: " + ", ".join(q["query_id"] + "=" + q["status"] for q in incomplete_queries)] if incomplete_queries else []) + (["undeclared or unauthorized scientific literature excluded"] if scientific_exclusions else []) + (["unauthorized or under-scoped family links excluded"] if excluded_family_links else []) + (["unresolved legal-history conflicts: " + ", ".join(sorted({c["record_id"] for c in legal_status_conflicts}))] if legal_status_conflicts else []) + (["OCR/manual facsimile review"] if claim_review else [])},
         "authorization_matrix": source_logs, "excluded_restricted_records": excluded, "excluded_scientific_records": scientific_exclusions, "excluded_family_links": excluded_family_links,
-        "query_results": query_results, "matched_patents": [allowed_records[rid] for rid in matched_ids],
+        "query_results": query_results, "matched_patents": [dict(allowed_records[rid], retrieval_basis="direct_query_match" if rid in direct_match_ids else "observed_family_expansion", direct_query_ids=sorted(q["query_id"] for q in query_results if any(m["record_id"] == rid for m in q["matches"]))) for rid in matched_ids],
         "primary_results": query_results, "observed_families": families,
         "scientific_literature": [p for p in scientific if any(p["paper_id"] in q["scientific_matches"] for q in query_results)],
         "claim_review_queue": claim_review,
-        "legal_status": [{"record_id": rid, "current": "unknown_requires_live_official_verification", "historical_assertions": allowed_records[rid]["legal_history_as_recorded"], "warning": "old facsimile/web/fee inference is not current official status"} for rid in matched_ids],
-        "risk_register": [{"area": "legal_status", "level": "unknown", "reason": "no real-time official verification in this finite task"}, {"area": "family", "level": "limited", "reason": "observed links are non-exhaustive and do not imply equal claim scope"}, {"area": "ocr", "level": "review_required" if claim_review else "source_bound", "reason": "facsimile recognition remains located and uncertain"}],
-        "metrics": {"declared_sources": len(source_specs), "authorized_patent_records": len(allowed_records), "excluded_restricted_records": len(excluded), "excluded_scientific_records": len(scientific_exclusions), "excluded_family_links": len(excluded_family_links), "queries": len(queries), "matched_patents": len(matched_ids), "observed_family_links": len(links), "scientific_comparison_records": sum(len(q["scientific_matches"]) for q in query_results)},
-        "uncertainties": ["This is source-located information retrieval, not infringement/FTO/validity/value advice or attorney review.", "Observed families are not global exhaustive families; claim versions are never flattened into one scope.", "No paywall/login/anti-bot restriction was bypassed and no restricted source text is exported."],
-        "change_records": ["Applied explicit source authorization and display-field scopes before using patent, scientific and family-link records; undeclared sources default to exclusion.", "Separated typed number and topic searches, observed families, historical status and scientific comparison evidence."],
+        "legal_status": [{"record_id": rid, "current": "unknown_requires_live_official_verification", "historical_assertions": allowed_records[rid]["legal_history_as_recorded"], "conflicts": [c for c in legal_status_conflicts if c["record_id"] == rid], "warning": "old facsimile/web/fee inference is not current official status"} for rid in matched_ids],
+        "legal_status_conflicts": legal_status_conflicts,
+        "risk_register": [{"area": "legal_status", "level": "conflict" if legal_status_conflicts else "unknown", "reason": "no real-time official verification in this finite task; conflicting historical assertions remain unresolved"}, {"area": "family", "level": "limited", "reason": "observed links are non-exhaustive and do not imply equal claim scope"}, {"area": "ocr", "level": "review_required" if claim_review else "source_bound", "reason": "facsimile recognition and merged-source boundaries remain located and uncertain"}],
+        "metrics": {"declared_sources": len(source_specs), "authorized_patent_records": len(allowed_records), "excluded_restricted_records": len(excluded), "excluded_scientific_records": len(scientific_exclusions), "excluded_family_links": len(excluded_family_links), "queries": len(queries), "directly_matched_patents": len(direct_match_ids), "matched_patents": len(matched_ids), "matched_patents_including_observed_family": len(matched_ids), "observed_family_links": len(links), "legal_status_conflicts": len(legal_status_conflicts), "scientific_comparison_records": sum(len(q["scientific_matches"]) for q in query_results)},
+        "uncertainties": ["This is source-located information retrieval, not infringement/FTO/validity/value advice or attorney review.", "Current official legal status is unavailable; local completed queries therefore remain partial for the full task.", "Observed families are not global exhaustive families; claim versions are never flattened into one scope.", "No paywall/login/anti-bot restriction was bypassed and no restricted source text is exported."],
+        "change_records": ["Applied explicit source authorization and display-field scopes before using patent, scientific and family-link records; undeclared sources default to exclusion.", "Separated typed number and topic searches, retained per-match selection evidence, expanded only observed family members, and preserved verbatim claim-version hashes and unresolved legal-history conflicts."],
         "_aliases": {"results": "query_results", "patents": "matched_patents", "families": "observed_families", "papers": "scientific_literature", "risks": "risk_register", "metrics_summary": "metrics"},
     }
 

@@ -339,6 +339,8 @@ def audit_build(data, base, entry, allowed_output, report):
     report.need(status in allowed, "build_status_honest", "构建状态为真实枚举")
     if status != "success":
         report.need(bool(build.get("reason")), "build_reason", "非成功说明未构建原因")
+        if allowed_output is not None:
+            report.need(False, "build_delivery_unverified", "合同交付必须真实执行并编译通过；当前状态只能partial", declared_status=status)
         compilation["reason"] = build.get("reason", "未执行编译")
         return
     if not within(entry, base) or not entry.is_file():

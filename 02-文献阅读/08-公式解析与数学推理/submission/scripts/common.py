@@ -1,13 +1,14 @@
 """Shared deterministic I/O helpers; Python 3.9+ standard library only."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
 import re
 import sys
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 MISSING = object()
 
 
@@ -108,6 +109,17 @@ def adapt_template(template, value, key, aliases):
                 return None
             if kind == "boolean":
                 return False
+            allowed = template.get("enum")
+            if isinstance(allowed, list):
+                if "status" in str(key).lower():
+                    for candidate in ("partial", "insufficient_evidence", "failed", "error"):
+                        if candidate in allowed:
+                            return candidate
+                if "not_reported" in allowed:
+                    return "not_reported"
+                # Do not invent an arbitrary scientific enum value; validation will
+                # keep the result partial until the Agent supplies a declared value.
+                return ""
             return unknown_value("", key)
         return value
     if isinstance(template, dict):
@@ -139,35 +151,52 @@ def bind_contract(case, payload, aliases=None):
     return result
 
 
+def matches_schema_type(value, kind):
+    if kind == "object":
+        return isinstance(value, dict)
+    if kind == "array":
+        return isinstance(value, list)
+    if kind == "string":
+        return isinstance(value, str)
+    if kind == "boolean":
+        return isinstance(value, bool)
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if kind == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if kind == "null":
+        return value is None
+    return True
+
+
 def contract_errors(contract, value, aliases=None, path="result", require_fields=True):
-    """Report declared fields/types without treating placeholders as evidence."""
+    """Validate nested required/type/enum/items without inventing missing evidence."""
     aliases = aliases or {}
-    if isinstance(contract, dict) and ("properties" in contract or contract.get("type") in {"object", "array", "string", "number", "integer", "boolean"}):
-        kind = contract.get("type", "object" if "properties" in contract else None)
-        expected = {"object": dict, "array": list, "string": str, "boolean": bool}.get(kind)
-        if kind in {"number", "integer"}:
-            valid = isinstance(value, (int, float) if kind == "number" else int) and not isinstance(value, bool)
-        else:
-            valid = isinstance(value, expected)
-        if not valid:
-            return [path + " has incorrect type for " + str(kind)]
-        if kind == "object":
-            errors = []
-            for name, spec in contract.get("properties", {}).items():
+    schema_kinds = {"object", "array", "string", "number", "integer", "boolean", "null"}
+    if isinstance(contract, dict) and ("properties" in contract or contract.get("type") in schema_kinds):
+        declared_kind = contract.get("type", "object" if "properties" in contract else None)
+        kinds = declared_kind if isinstance(declared_kind, list) else [declared_kind]
+        if declared_kind is not None and not any(matches_schema_type(value, kind) for kind in kinds):
+            return [path + " has incorrect type for " + str(declared_kind)]
+        errors = []
+        if "enum" in contract and value not in contract["enum"]:
+            errors.append(path + " is outside declared enum " + repr(contract["enum"]))
+        if "object" in kinds:
+            properties = contract.get("properties", {})
+            if require_fields:
+                required = contract.get("required", [])
+                for name in required:
+                    if pick(value, name, aliases) is MISSING:
+                        errors.append(path + "." + name + " is required")
+            for name, spec in properties.items():
                 child = pick(value, name, aliases)
-                child_path = path + "." + name
-                if child is MISSING:
-                    if require_fields:
-                        errors.append(child_path + " is missing")
-                else:
-                    errors.extend(contract_errors(spec, child, aliases, child_path, require_fields))
-            return errors
-        if kind == "array":
-            if not contract.get("items"):
-                return []
-            return [error for index, item in enumerate(value)
-                    for error in contract_errors(contract["items"], item, aliases, "%s[%d]" % (path, index))]
-        return []
+                if child is not MISSING:
+                    errors.extend(contract_errors(spec, child, aliases, path + "." + name, require_fields))
+        elif "array" in kinds and isinstance(contract.get("items"), dict):
+            for index, item in enumerate(value):
+                errors.extend(contract_errors(contract["items"], item, aliases,
+                                              "%s[%d]" % (path, index), require_fields))
+        return errors
     if isinstance(contract, dict):
         if not isinstance(value, dict):
             return [path + " has incorrect type for object"]
@@ -186,7 +215,7 @@ def contract_errors(contract, value, aliases=None, path="result", require_fields
             return [path + " has incorrect type for array"]
         if contract:
             return [error for index, item in enumerate(value)
-                    for error in contract_errors(contract[0], item, aliases, "%s[%d]" % (path, index))]
+                    for error in contract_errors(contract[0], item, aliases, "%s[%d]" % (path, index), require_fields)]
         return []
     expected = type(contract)
     if value is None or not isinstance(value, expected) or (expected is not bool and isinstance(value, bool)):
@@ -235,6 +264,29 @@ def evidence_ok(index, evidence):
     identifier = str(evidence.get("paragraph_id", ""))
     quote = evidence.get("quote", "")
     return bool(identifier and isinstance(quote, str) and quote and quote in index.get(identifier, ""))
+
+
+def mark_result_partial(result, contract):
+    """Use a declared degraded status instead of introducing an invalid enum value."""
+    if not isinstance(result, dict) or "status" not in result:
+        return
+    spec = None
+    if isinstance(contract, dict):
+        if isinstance(contract.get("properties"), dict):
+            spec = contract["properties"].get("status")
+        elif "type" not in contract:
+            spec = contract.get("status")
+    allowed = spec.get("enum") if isinstance(spec, dict) else None
+    if isinstance(allowed, list):
+        if result.get("status") in {"partial", "insufficient_evidence"} and result["status"] in allowed:
+            return
+        if "partial" in allowed:
+            result["status"] = "partial"
+        elif "insufficient_evidence" in allowed:
+            result["status"] = "insufficient_evidence"
+        return
+    if spec is None or isinstance(spec, str) or (isinstance(spec, dict) and spec.get("type") == "string"):
+        result["status"] = "partial"
 
 
 class Run:
@@ -298,8 +350,7 @@ class Run:
             code = 2
             base["status"] = "partial"
             self.uncertainty.extend(error for error in errors if error not in self.uncertainty)
-            if isinstance(result.get("status"), str):
-                result["status"] = "partial"
+            mark_result_partial(result, self.case.get("output_contract"))
             if isinstance(result.get("failures"), list):
                 result["failures"].extend(error for error in errors if error not in result["failures"])
             if isinstance(result.get("uncertainty"), list):

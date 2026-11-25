@@ -1,6 +1,8 @@
 {
+  "case_id": "synthetic-pathway-v1",
   "workorder": "biological_mechanism_pathway",
   "title": "Source-bound mechanism and feedback",
+  "output_contract": {"case_id": "synthetic-pathway-v1", "status": "", "artifacts": [], "validation": {"nested": {"preserve": true}}, "render": {"nested": {"preserve": true}}, "uncertainty": []},
   "sources": [
     {
       "id": "src-entities",
@@ -10,7 +12,7 @@
     {
       "id": "src-edges",
       "page": 1, "locator": "synthetic://pathway/source#interactions",
-      "text": "Ligand L binds Receptor R. Receptor R activates Kinase A. Receptor R activates Factor B. Kinase A phosphorylates Regulator C. Regulator C inhibits Receptor R as a feedback branch."
+      "text": "Ligand L binds Receptor R. Receptor R activates Kinase A. Receptor R activates Factor B. Factor B transports Regulator C. Kinase A phosphorylates Regulator C. Regulator C inhibits Receptor R as a feedback branch."
     }
   ],
   "compartments": [
@@ -30,6 +32,7 @@
     {"id": "bind-l-r", "type": "binding", "from": "ligand-l", "to": "receptor-r", "source": "src-edges", "quote": "Ligand L binds Receptor R."},
     {"id": "activate-a", "type": "activation", "from": "receptor-r", "to": "kinase-a", "source": "src-edges", "quote": "Receptor R activates Kinase A."},
     {"id": "activate-b", "type": "activation", "from": "receptor-r", "to": "factor-b", "source": "src-edges", "quote": "Receptor R activates Factor B."},
+    {"id": "transport-c", "type": "transport", "from": "factor-b", "to": "regulator-c", "source": "src-edges", "quote": "Factor B transports Regulator C."},
     {"id": "phosphorylate-c", "type": "phosphorylation", "from": "kinase-a", "to": "regulator-c", "source": "src-edges", "quote": "Kinase A phosphorylates Regulator C."},
     {"id": "feedback-c-r", "type": "inhibition", "from": "regulator-c", "to": "receptor-r", "route": "left-feedback", "source": "src-edges", "quote": "Regulator C inhibits Receptor R as a feedback branch."}
   ],

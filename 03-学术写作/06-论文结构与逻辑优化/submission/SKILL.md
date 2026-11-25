@@ -22,9 +22,9 @@ description: "对完整学术论文开展研究问题、章节结构、论证链
 ## 真实运行入口与资源
 - 先完整读取 `/input/case.json` 与 `/input/task.md`，再读取 case 指向的全部实际材料；执行前也读取 `environment/resources.yaml`。以原始 `case_id`、章节范围、语言、格式和 `output_contract` 为唯一契约，Unknown 不猜测，未要求的附件不制造。
 - 平台把本技能安装到 `/skills/weekly-skill`。以技能根目录为基准使用 `scripts/audit.py` 和 `references/record-template.json`；例如 `python3 /skills/weekly-skill/scripts/audit.py /app/work/audit_input.json`。模板只是内部审计结构示意，不是答案或公开 `output_contract`。
-- 读取实际case后先运行 `python3 /skills/weekly-skill/scripts/initialize_case.py`（默认读取 `/input/case.json`、`/input/task.md`，写入 `/app/work` 和 `/app/output`）。驱动只编目显式 `materials` 路径及可选 `--material` 路径，保留真实 `case_id` 和原始 `output_contract` 字段并先落 `partial`；未支持的case材料布局须由Agent实读后显式传入，不得猜测。驱动不生成六维诊断，返回partial不代表论文分析完成。
+- 读取实际case后先运行 `python3 /skills/weekly-skill/scripts/initialize_case.py`（默认读取 `/input/case.json`、`/input/task.md`，写入 `/app/work` 和 `/app/output`）。驱动只编目显式 `materials` 路径及可选 `--material` 路径，保留真实 `case_id` 和原始 `output_contract` 字段并先落 `partial`；未支持的case材料布局须由Agent实读后显式传入，不得猜测。对声明的UTF-8 `.md/.txt/.text/.tex` 材料另生成 `/app/work/manuscript-index.json`，含章节、段落稳定ID、精确字符区间和待复核的句子候选；索引不是语义诊断，PDF/其他格式仍须用实际工具抽取后再定位。驱动不生成六维诊断，返回partial不代表论文分析完成。
 - `/app/work` 保存只读输入快照清单、抽取文本、稳定ID、分块状态、审计输入/输出与中间稿；`/app/output` 只保存契约要求的完整可编辑成品、指定预览和 `result.json`。制作目录是 `/app/submission`，不要污染输入。
-- `result.json` 必须原样保留 `case_id` 和实际 `output_contract` 的全部原始字段，把成品、来源、状态、不确定性、变更、缺口落到契约指定字段；不得把示意字段强加给 case。内部审计字段留在 `/app/work/audit_input.json`，须按实际字段语义逐项映射到公开契约，不能把 `dimensions`、`actions` 或四个新增诊断字段自动复制为公开字段。各状态枚举以契约为准；初始化驱动只填写契约允许的部分状态与缺口，其余未知值留空，等待Agent完成。
+- `result.json` 必须原样保留 `case_id` 和实际 `output_contract` 的全部原始字段，把成品、来源、状态、不确定性、变更、缺口落到契约指定字段；不得把示意字段强加给 case。内部审计字段留在 `/app/work/audit_input.json`，须按实际字段语义逐项映射到公开契约，不能把 `dimensions`、`actions` 或四个新增诊断字段自动复制为公开字段。各状态枚举以契约为准；初始化驱动只填写契约允许的部分状态与缺口，其余未知值留空，等待Agent完成。成品落盘后运行 `python3 /skills/weekly-skill/scripts/initialize_case.py --finalize`，递归检查原 `case_id` 及嵌套 `required/type/enum/items`，报告写入 `/app/work/finalization.json`；校验失败退出2并在状态枚举允许时标为 `partial`，不得为通过校验杜撰缺失值。
 - 材料编目至少记录材料ID、真实路径、类型、版本线索、可读范围、缺失及定位方式；证据映射记录成品锚点、论断/对象、来源ID、精确位置、原文或数值、支持范围和处理动作。冲突双列，不静默择一。
 
 ## 增量执行、状态与异常
